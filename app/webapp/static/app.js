@@ -6,6 +6,8 @@ const state = {
   activePane: "phone",
   activeAccountId: null,
   noticeTimer: null,
+  qrLoginGeneration: 0,
+  qrLoginId: null,
 };
 
 const qs = (selector, root = document) => root.querySelector(selector);
@@ -498,6 +500,7 @@ async function submitPhoneLogin(event) {
   setBusy(button, true, step === "start" ? "正在发送…" : "正在验证…");
   try {
     if (step === "start") {
+      await cancelQrLogin({ quiet: true });
       const data = await api("/accounts/login/start", { method: "POST", body: JSON.stringify({ phone: payload.phone }) });
       if (data.already_exists) {
         showNotice(data.message, "ok");
@@ -525,6 +528,112 @@ async function submitPhoneLogin(event) {
     showNotice(`添加账号失败：${error.message}`, "error");
   } finally {
     setBusy(button, false);
+  }
+}
+
+function renderQrLogin(data) {
+  const panel = qs("#qrLoginPanel");
+  panel.classList.remove("hidden");
+  if (data.qr_image) qs("#qrLoginImage").src = data.qr_image;
+  qs("#qrLoginStatus").textContent = data.message || "等待扫码确认";
+  const needsPassword = Boolean(data.needs_password);
+  qs("#qrPasswordLabel").classList.toggle("hidden", !needsPassword);
+  qs("#qrPasswordSubmitBtn").classList.toggle("hidden", !needsPassword);
+  if (needsPassword) {
+    qs("#qrLoginStatus").textContent = `${data.message || "请输入 2FA 密码"}（提示：${data.hint || "-"}）`;
+    qs("#qrPassword").focus();
+  }
+}
+
+async function finishQrLogin(data) {
+  state.qrLoginGeneration += 1;
+  state.qrLoginId = null;
+  qs("#qrLoginPanel").classList.add("hidden");
+  qs("#qrPassword").value = "";
+  showNotice(data.message || "二维码登录完成", "ok");
+  await loadBootstrap({ quiet: true });
+  await openAccountDetail(data.account.id);
+}
+
+async function pollQrLogin(loginId, generation) {
+  while (state.qrLoginId === loginId && state.qrLoginGeneration === generation) {
+    try {
+      const data = await api("/accounts/login/qr/poll", {
+        method: "POST",
+        body: JSON.stringify({ login_id: loginId }),
+      });
+      if (state.qrLoginId !== loginId || state.qrLoginGeneration !== generation) return;
+      renderQrLogin(data);
+      if (data.status === "complete") {
+        await finishQrLogin(data);
+        return;
+      }
+      if (data.needs_password) return;
+    } catch (error) {
+      if (state.qrLoginId !== loginId || state.qrLoginGeneration !== generation) return;
+      state.qrLoginId = null;
+      qs("#qrLoginPanel").classList.add("hidden");
+      showNotice(`二维码登录失败：${error.message}`, "error");
+      return;
+    }
+  }
+}
+
+async function startQrLogin() {
+  const button = qs("#qrLoginStartBtn");
+  setBusy(button, true, "正在生成…");
+  await cancelQrLogin({ quiet: true });
+  const generation = state.qrLoginGeneration + 1;
+  state.qrLoginGeneration = generation;
+  try {
+    const data = await api("/accounts/login/qr/start", { method: "POST", body: "{}" });
+    state.qrLoginId = data.login_id;
+    qs("#phoneLoginForm").elements.login_id.value = "";
+    renderQrLogin(data);
+    showNotice(data.message || "二维码已生成");
+    void pollQrLogin(data.login_id, generation);
+  } catch (error) {
+    showNotice(`生成二维码失败：${error.message}`, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function submitQrPassword() {
+  const button = qs("#qrPasswordSubmitBtn");
+  const loginId = state.qrLoginId;
+  const password = qs("#qrPassword").value;
+  if (!loginId) return showNotice("二维码登录流程已过期，请重新生成", "error");
+  if (!password) return showNotice("请输入目标账号的 2FA 密码", "error");
+  setBusy(button, true, "正在验证…");
+  try {
+    const data = await api("/accounts/login/qr/poll", {
+      method: "POST",
+      body: JSON.stringify({ login_id: loginId, password }),
+    });
+    renderQrLogin(data);
+    if (data.status === "complete") await finishQrLogin(data);
+  } catch (error) {
+    showNotice(`2FA 验证失败：${error.message}`, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function cancelQrLogin({ quiet = false } = {}) {
+  const loginId = state.qrLoginId;
+  state.qrLoginGeneration += 1;
+  state.qrLoginId = null;
+  qs("#qrLoginPanel")?.classList.add("hidden");
+  if (!loginId) return;
+  try {
+    await api("/accounts/login/qr/cancel", {
+      method: "POST",
+      body: JSON.stringify({ login_id: loginId }),
+    });
+    if (!quiet) showNotice("二维码登录已取消");
+  } catch (error) {
+    if (!quiet) showNotice(`取消失败：${error.message}`, "error");
   }
 }
 
@@ -785,6 +894,9 @@ qs("#accountSearch").addEventListener("keydown", (event) => { if (event.key === 
 qs("#batchForm").addEventListener("submit", submitBatch);
 qs("#batchForm [name=type]").addEventListener("change", batchFieldMode);
 qs("#phoneLoginForm").addEventListener("submit", submitPhoneLogin);
+qs("#qrLoginStartBtn").addEventListener("click", startQrLogin);
+qs("#qrLoginCancelBtn").addEventListener("click", () => cancelQrLogin());
+qs("#qrPasswordSubmitBtn").addEventListener("click", submitQrPassword);
 qs("#sessionImportForm").addEventListener("submit", submitSessionImport);
 qs("#sessionExportForm").addEventListener("submit", submitSessionExport);
 qs("#targetForm").addEventListener("submit", submitTarget);

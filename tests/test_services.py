@@ -13,10 +13,12 @@ from app.bot.handlers import (
 )
 from app.config import settings
 from app.services import security_health
+from app.services.qr_code import login_qr_png
 from app.services.rate_limit import validate_rate_values
 from app.services.security_health import SecurityHealthCheck, SecurityHealthReport
 from app.services.targets import canonicalize_target_ref
 from app.tg import batch_ops
+from app.tg.account_ops import phone_from_user
 
 
 def test_account_selection_is_bounded() -> None:
@@ -25,6 +27,17 @@ def test_account_selection_is_bounded() -> None:
         parse_account_selection("0")
     with pytest.raises(ValueError):
         parse_account_selection("1-201")
+
+
+def test_login_qr_is_generated_locally_as_png() -> None:
+    payload = login_qr_png("tg://login?token=test-token")
+    assert payload.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_qr_login_phone_is_normalized_from_telegram_user() -> None:
+    assert phone_from_user(SimpleNamespace(phone="447700900123")) == "+447700900123"
+    with pytest.raises(ValueError, match="未返回账号手机号"):
+        phone_from_user(SimpleNamespace(phone=None))
 
 
 def test_target_canonicalization() -> None:

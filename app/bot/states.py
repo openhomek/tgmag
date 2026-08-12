@@ -6,6 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 class LoginFlow(StatesGroup):
     phone = State()
     code = State()
+    qr_wait = State()
     password = State()
 
 

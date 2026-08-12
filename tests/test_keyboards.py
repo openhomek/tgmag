@@ -7,6 +7,7 @@ from app.bot.keyboards import (
     login_email_account_panel,
     login_email_domains_panel,
     login_email_guard_panel,
+    login_phone_panel,
     main_menu,
 )
 from app.config import settings
@@ -33,6 +34,7 @@ def test_main_navigation_labels_are_reply_keyboard_buttons() -> None:
         "系统状态",
         "账号管理",
         "登录账号",
+        "扫码登录",
         "导入Session",
         "导出Session",
         "批量导入Session",
@@ -41,6 +43,13 @@ def test_main_navigation_labels_are_reply_keyboard_buttons() -> None:
         "安全防护",
         "监控中心",
     }
+
+
+def test_phone_login_offers_qr_fallback() -> None:
+    callbacks = {
+        button.callback_data for row in login_phone_panel().inline_keyboard for button in row
+    }
+    assert callbacks == {"login:qr", "flow:cancel"}
 
 
 def test_native_bot_menu_opens_configured_mini_app(monkeypatch: pytest.MonkeyPatch) -> None:

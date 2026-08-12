@@ -11,6 +11,7 @@ dependencies = [
   "cryptography>=50,<51",
   "pydantic>=2.7,<3",
   "pydantic-settings>=2.11,<3",
+  "qrcode[pil]>=8,<9",
   "SQLAlchemy>=2.0,<3",
   "Telethon>=1.36,<2",
 ]

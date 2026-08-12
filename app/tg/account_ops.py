@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient, functions, types
 from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
+from telethon.tl.custom.qrlogin import QRLogin
 
 from app.config import settings
 from app.db.models import (
@@ -23,6 +25,7 @@ from app.db.models import (
 )
 from app.services.crypto import decrypt_text, encrypt_text, mask_phone
 
+logger = logging.getLogger(__name__)
 
 STATUS_NORMAL = "normal"
 STATUS_LIMITED = "limited"
@@ -55,8 +58,45 @@ def sent_code_delivery_info(sent: types.auth.SentCode) -> dict[str, str | int | 
 async def start_login(phone: str) -> tuple[TelegramClient, str, dict[str, str | int | None]]:
     client = TelegramClient(StringSession(), settings.tg_api_id, settings.tg_api_hash)
     await client.connect()
-    sent = await client.send_code_request(phone)
-    return client, sent.phone_code_hash, sent_code_delivery_info(sent)
+    try:
+        sent = await client.send_code_request(phone)
+    except Exception:
+        await client.disconnect()
+        raise
+    delivery = sent_code_delivery_info(sent)
+    logger.info(
+        "Telegram accepted login code request for %s: type=%s next_type=%s timeout=%s",
+        mask_phone(phone),
+        delivery["type"],
+        delivery["next_type"],
+        delivery["timeout"],
+    )
+    return client, sent.phone_code_hash, delivery
+
+
+async def start_qr_login() -> tuple[TelegramClient, QRLogin]:
+    client = TelegramClient(StringSession(), settings.tg_api_id, settings.tg_api_hash)
+    await client.connect()
+    try:
+        qr_login = await client.qr_login()
+    except Exception:
+        await client.disconnect()
+        raise
+    return client, qr_login
+
+
+async def finish_authorized_login(client: TelegramClient) -> tuple[str, types.User]:
+    me = await client.get_me()
+    session_str = client.session.save()
+    await client.disconnect()
+    return session_str, me
+
+
+def phone_from_user(user: types.User) -> str:
+    phone = str(getattr(user, "phone", "") or "").strip()
+    if not phone:
+        raise ValueError("Telegram 未返回账号手机号，无法保存二维码登录结果")
+    return phone if phone.startswith("+") else f"+{phone}"
 
 
 async def complete_login(

@@ -29,6 +29,7 @@ COMMANDS = """可用指令
 /account <id> - 账号详情
 /account_info <id> - 账号详细信息与 SpamBot 状态
 /login - 手动登录/注册账号
+/qr_login - 使用已登录客户端扫描二维码登录/注册账号
 /import_session - 导入 Telethon StringSession
 /import_sessions - 批量导入导出文件里的 Session
 /export_session <id> - 导出单个账号的 Telethon StringSession

@@ -5,6 +5,7 @@ import shlex
 import asyncio
 import tempfile
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,6 +50,7 @@ from app.bot.keyboards import (
     login_email_guard_panel,
     login_email_retry_panel,
     login_email_whitelist_panel,
+    login_phone_panel,
     main_menu,
     mini_app_panel,
     monitor_panel,
@@ -99,6 +101,7 @@ from app.services.login_email_protection import (
     set_selected_domain,
     set_whitelisted,
 )
+from app.services.qr_code import login_qr_png
 from app.services.rate_limit import RateGate, get_rate, validate_rate_values
 from app.services.security_health import run_security_health_check
 from app.services.targets import canonicalize_target_ref, require_allowed_target
@@ -114,6 +117,7 @@ MENU_TEXTS = {
     "系统状态": "status",
     "账号管理": "accounts",
     "登录账号": "login",
+    "扫码登录": "qr_login",
     "导入Session": "import_session",
     "批量导入Session": "import_sessions",
     "导出Session": "export_session",
@@ -144,6 +148,7 @@ BOT_COMMANDS = [
     BotCommand(command="status", description="查看系统状态"),
     BotCommand(command="accounts", description="管理 Telegram 账号"),
     BotCommand(command="login", description="登录并添加账号"),
+    BotCommand(command="qr_login", description="扫码登录并添加账号"),
     BotCommand(command="app", description="打开内置管理应用"),
     BotCommand(command="settings", description="目标白名单与速率设置"),
     BotCommand(command="security", description="登录邮箱与账号安全防护"),
@@ -638,6 +643,11 @@ async def ask_callback_with_cancel(callback: CallbackQuery, text: str, placehold
         await ask_with_cancel(callback.message, text, placeholder)
 
 
+async def qr_flow_is_active(state: FSMContext, flow_id: str) -> bool:
+    data = await state.get_data()
+    return await state.get_state() == LoginFlow.qr_wait.state and data.get("flow_id") == flow_id
+
+
 async def delete_sensitive_input(message: Message) -> None:
     try:
         await message.delete()
@@ -785,9 +795,128 @@ async def security_command(
 
 @router.message(Command("login"))
 async def login_start(message: Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    current_data = await state.get_data()
+    if current_data.get("client") is not None and current_state in {
+        LoginFlow.code.state,
+        LoginFlow.password.state,
+        LoginFlow.qr_wait.state,
+    }:
+        if current_state == LoginFlow.qr_wait.state:
+            text = "当前二维码仍在等待扫码，本次没有重新生成。"
+        elif current_state == LoginFlow.password.state:
+            text = "当前登录已进入 2FA 密码校验，本次没有重新发码。"
+        else:
+            delivery = current_data.get("delivery") or {}
+            text = (
+                "当前验证码请求仍在等待输入，本次没有重复发码。\n"
+                f"送达方式：{delivery.get('label') or 'Telegram 指定方式'}"
+            )
+        await ask_with_cancel(message, text, "继续当前登录流程")
+        return
     await state.clear()
     await state.set_state(LoginFlow.phone)
-    await ask_with_cancel(message, "请输入手机号，格式如 +8613800000000", "+8613800000000")
+    await message.answer(
+        "请输入手机号，格式如 +8613800000000\n\n"
+        "如果验证码收不到，可以改用二维码登录。",
+        reply_markup=login_phone_panel(),
+    )
+
+
+@router.message(Command("qr_login"))
+async def qr_login_start(
+    message: Message,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    client_pool: ClientPool,
+) -> None:
+    previous = await state.get_data()
+    previous_client = previous.get("client")
+    if previous_client is not None:
+        try:
+            await previous_client.disconnect()
+        except Exception:
+            pass
+    await state.clear()
+
+    flow_id = uuid.uuid4().hex
+    try:
+        client, qr_login = await account_ops.start_qr_login()
+    except Exception as exc:
+        await message.answer(f"生成登录二维码失败：{exc}", reply_markup=main_menu())
+        return
+
+    await state.set_state(LoginFlow.qr_wait)
+    await state.update_data(client=client, login_method="qr", flow_id=flow_id)
+    wait_task = asyncio.create_task(qr_login.wait(), name=f"qr-login-{flow_id}")
+    qr_message: Message | None = None
+    try:
+        qr_message = await message.answer_photo(
+            BufferedInputFile(login_qr_png(qr_login.url), filename="telegram-login.png"),
+            caption=(
+                "请使用已经登录目标账号的 Telegram 客户端扫码：\n"
+                "设置 → 设备 → 连接桌面设备。\n\n"
+                "二维码为一次性登录凭证，请勿转发；过期后可重新生成。"
+            ),
+            reply_markup=cancel_inline(),
+        )
+        await wait_task
+        if not await qr_flow_is_active(state, flow_id):
+            return
+        session_str, me = await account_ops.finish_authorized_login(client)
+        phone = account_ops.phone_from_user(me)
+    except asyncio.TimeoutError:
+        if await qr_flow_is_active(state, flow_id):
+            await state.clear()
+            await message.answer("登录二维码已过期，请重新点击“扫码登录”生成。", reply_markup=main_menu())
+        return
+    except SessionPasswordNeededError:
+        if not await qr_flow_is_active(state, flow_id):
+            return
+        hint = "-"
+        try:
+            twofa_info = await account_ops.get_2fa_info(client)
+            hint = str(twofa_info.get("hint") or "-")
+        except Exception:
+            pass
+        await state.set_state(LoginFlow.password)
+        await state.update_data(client=client, login_method="qr", flow_id=flow_id)
+        await ask_with_cancel(message, f"扫码确认成功，该账号需要 2FA 密码，请输入。\n密码提示：{hint}", "2FA 密码")
+        return
+    except Exception as exc:
+        if await qr_flow_is_active(state, flow_id):
+            await state.clear()
+            await message.answer(f"二维码登录失败：{exc}", reply_markup=main_menu())
+        return
+    finally:
+        if not wait_task.done():
+            wait_task.cancel()
+        if qr_message is not None:
+            try:
+                await qr_message.delete()
+            except TelegramAPIError:
+                pass
+        if await state.get_state() != LoginFlow.password.state and client.is_connected():
+            await client.disconnect()
+
+    async with sessionmaker() as session:
+        account = await account_ops.save_logged_in_account(session, phone, session_str, me)
+    await state.clear()
+    await message.answer(f"二维码登录完成：账号ID #{account.id} {account.phone_masked}", reply_markup=main_menu())
+    await message.answer("账号操作", reply_markup=account_actions_panel(account.id))
+    await prompt_post_login_security(message, account, client_pool)
+
+
+@router.callback_query(F.data == "login:qr")
+async def qr_login_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    client_pool: ClientPool,
+) -> None:
+    await callback.answer()
+    if callback.message:
+        await qr_login_start(callback.message, state, sessionmaker, client_pool)
 
 
 @router.message(LoginFlow.phone)
@@ -954,8 +1083,14 @@ async def login_password(
         await state.set_state(LoginFlow.password)
         await ask_with_cancel(message, f"2FA 校验失败：{exc}\n请重新输入，或取消后重新登录。", "2FA 密码")
         return
+    try:
+        phone = data.get("phone") or account_ops.phone_from_user(me)
+    except ValueError as exc:
+        await state.clear()
+        await message.answer(str(exc), reply_markup=main_menu())
+        return
     async with sessionmaker() as session:
-        account = await account_ops.save_logged_in_account(session, data["phone"], session_str, me, password)
+        account = await account_ops.save_logged_in_account(session, phone, session_str, me, password)
     await state.clear()
     await message.answer(f"登录完成：账号ID #{account.id} {account.phone_masked}", reply_markup=main_menu())
     await message.answer("账号操作", reply_markup=account_actions_panel(account.id))
@@ -1548,6 +1683,8 @@ async def menu_text_command(
         await message.answer(text, reply_markup=accounts_panel(accounts_list))
     elif action == "login":
         await login_start(message, state)
+    elif action == "qr_login":
+        await qr_login_start(message, state, sessionmaker, client_pool)
     elif action == "import_session":
         await import_session_start(message, state)
     elif action == "import_sessions":

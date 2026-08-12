@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <title>TGMAG 控制台</title>
-    <link rel="stylesheet" href="/mini-app/static/styles.css?v=20260810-0140" />
+    <link rel="stylesheet" href="/mini-app/static/styles.css?v=20260812-ui2" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -61,7 +61,7 @@
 
           <section class="quick-grid">
             <button class="quick-card" type="button" data-view-jump="actions" data-action-pane="phone">
-              <span class="quick-icon blue">＋</span><span><strong>添加账号</strong><small>手机号验证或导入 Session</small></span><b>›</b>
+              <span class="quick-icon blue">＋</span><span><strong>添加账号</strong><small>手机号、扫码或导入 Session</small></span><b>›</b>
             </button>
             <button class="quick-card" type="button" data-view-jump="accounts">
               <span class="quick-icon violet">◎</span><span><strong>管理账号</strong><small>状态、资料与安全设置</small></span><b>›</b>
@@ -101,6 +101,7 @@
         <section id="actionsView" class="view">
           <div class="segmented" role="tablist" aria-label="操作类型">
             <button class="segment active" type="button" data-action-pane="phone">手机号添加</button>
+            <button class="segment" type="button" data-action-pane="qr">二维码登录</button>
             <button class="segment" type="button" data-action-pane="session">导入 Session</button>
             <button class="segment" type="button" data-action-pane="batch">批量任务</button>
             <button class="segment" type="button" data-action-pane="export">导出</button>
@@ -115,6 +116,25 @@
                 <div class="split"><label><span>验证码</span><input name="code" inputmode="numeric" autocomplete="one-time-code" /></label><label><span>2FA 密码</span><input name="password" type="password" autocomplete="current-password" /></label></div>
                 <div class="button-row"><button class="secondary-button" type="submit" data-step="start">发送验证码</button><button class="primary-button" type="submit" data-step="verify">确认添加</button></div>
               </form>
+            </div>
+          </section>
+
+          <section class="action-pane" data-pane="qr">
+            <div class="form-layout">
+              <div class="form-intro"><span class="intro-icon">QR</span><h2>二维码登录</h2><p>适合验证码迟迟收不到的账号。请使用已经登录目标账号的另一台 Telegram 客户端扫码确认。</p></div>
+              <section class="panel form" aria-labelledby="qrLoginTitle">
+                <div><h3 id="qrLoginTitle">一次性登录二维码</h3><p class="muted">在目标账号中打开“设置 → 设备 → 连接桌面设备”。二维码会在过期后自动刷新，请勿转发。</p></div>
+                <button id="qrLoginStartBtn" class="primary-button" type="button">生成二维码</button>
+                <div id="qrLoginPanel" class="qr-login-box hidden">
+                  <img id="qrLoginImage" alt="Telegram 一次性登录二维码" />
+                  <p id="qrLoginStatus" class="muted" role="status">等待扫码确认</p>
+                  <label id="qrPasswordLabel" class="hidden"><span>目标账号 2FA 密码</span><input id="qrPassword" type="password" autocomplete="current-password" /></label>
+                  <div class="button-row">
+                    <button id="qrLoginCancelBtn" class="secondary-button" type="button">取消</button>
+                    <button id="qrPasswordSubmitBtn" class="primary-button hidden" type="button">确认 2FA 密码</button>
+                  </div>
+                </div>
+              </section>
             </div>
           </section>
 
@@ -183,6 +203,6 @@
         <button class="tab" type="button" data-view="settings"><span>⚙</span><small>设置</small></button>
       </nav>
     </div>
-    <script src="/mini-app/static/app.js?v=20260810-0140"></script>
+    <script src="/mini-app/static/app.js?v=20260812-ui2"></script>
   </body>
 </html>

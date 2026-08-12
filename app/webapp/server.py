@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import tempfile
 import time
@@ -15,6 +16,7 @@ from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telethon import functions
 from telethon.errors import (
+    BadRequestError,
     FloodError,
     FloodWaitError,
     PasswordHashInvalidError,
@@ -49,6 +51,7 @@ from app.services.login_email_protection import (
     login_email_wait_remaining,
     parse_login_email_window_hours,
 )
+from app.services.qr_code import login_qr_png
 from app.services.rate_limit import RateGate, get_rate, validate_rate_values
 from app.services.security_health import SecurityHealthReport, run_security_health_check
 from app.services.targets import canonicalize_target_ref, require_allowed_target
@@ -243,12 +246,46 @@ async def close_pending_login(pending: dict[str, Any] | None) -> None:
             logger.debug("Pending Telegram login disconnect failed", exc_info=True)
 
 
+async def close_user_pending_logins(app: web.Application, user_id: int) -> None:
+    prefix = f"{user_id}:"
+    keys = [key for key in app["pending_logins"] if key.startswith(prefix)]
+    for key in keys:
+        await close_pending_login(app["pending_logins"].pop(key, None))
+
+
+def qr_login_payload(qr_login: Any) -> dict[str, Any]:
+    image = base64.b64encode(login_qr_png(qr_login.url)).decode("ascii")
+    return {
+        "qr_image": f"data:image/png;base64,{image}",
+        "expires_at": qr_login.expires.isoformat(),
+    }
+
+
+def reusable_phone_login(
+    app: web.Application,
+    user_id: int,
+    phone: str,
+) -> tuple[str, dict[str, Any]] | None:
+    prefix = f"{user_id}:"
+    for key, pending in app["pending_logins"].items():
+        if not key.startswith(prefix) or pending.get("method") != "phone":
+            continue
+        if pending.get("phone") != phone or pending.get("needs_password"):
+            continue
+        delivery = pending.get("delivery") or {}
+        reuse_seconds = max(30, int(delivery.get("timeout") or 60))
+        if time.time() - float(pending.get("created_at") or 0) < reuse_seconds:
+            return key.split(":", 1)[1], pending
+    return None
+
+
 async def prune_pending_logins(app: web.Application, max_age_seconds: int = 600) -> None:
-    cutoff = time.time() - max_age_seconds
+    now = time.time()
     stale_keys = [
         key
         for key, pending in app["pending_logins"].items()
-        if float(pending.get("created_at") or 0) < cutoff
+        if now - float(pending.get("created_at") or 0)
+        > (180 if pending.get("method") == "qr" else max_age_seconds)
     ]
     for key in stale_keys:
         await close_pending_login(app["pending_logins"].pop(key, None))
@@ -468,6 +505,20 @@ async def api_login_start(request: web.Request) -> web.Response:
     phone = str(data.get("phone") or "").strip()
     if not phone:
         raise web.HTTPBadRequest(text="phone required")
+    reusable = reusable_phone_login(request.app, user.id, phone)
+    if reusable is not None:
+        login_id, pending = reusable
+        delivery = pending.get("delivery") or {}
+        detail = str(delivery.get("label") or "Telegram 指定方式")
+        return web.json_response(
+            {
+                "ok": True,
+                "login_id": login_id,
+                "delivery": delivery,
+                "reused": True,
+                "message": f"上一条验证码请求仍有效（{detail}），本次未重复发码",
+            }
+        )
     phone_masked = account_ops.mask_phone(phone)
     async with sessionmaker() as session:
         candidates = list(
@@ -496,6 +547,7 @@ async def api_login_start(request: web.Request) -> web.Response:
                         "message": f"该手机号已在系统中：账号 #{existing.id}",
                     }
                 )
+    await close_user_pending_logins(request.app, user.id)
     try:
         client, phone_code_hash, delivery = await account_ops.start_login(phone)
     except PhoneNumberInvalidError as exc:
@@ -512,6 +564,7 @@ async def api_login_start(request: web.Request) -> web.Response:
         "phone": phone,
         "phone_code_hash": phone_code_hash,
         "delivery": delivery,
+        "method": "phone",
         "created_at": time.time(),
     }
     detail = delivery["label"]
@@ -527,6 +580,137 @@ async def api_login_start(request: web.Request) -> web.Response:
             "message": f"验证码已发送。送达方式：{detail}",
         }
     )
+
+
+async def api_login_qr_start(request: web.Request) -> web.Response:
+    user = await authenticated(request)
+    await prune_pending_logins(request.app)
+    await close_user_pending_logins(request.app, user.id)
+    try:
+        client, qr_login = await account_ops.start_qr_login()
+    except FloodWaitError as exc:
+        raise web.HTTPTooManyRequests(
+            text=f"二维码请求过于频繁，请在 {format_wait_deadline(exc.seconds)} 后再试"
+        ) from exc
+    login_id = uuid.uuid4().hex
+    request.app["pending_logins"][login_payload_key(user.id, login_id)] = {
+        "client": client,
+        "qr_login": qr_login,
+        "method": "qr",
+        "poll_lock": asyncio.Lock(),
+        "created_at": time.time(),
+    }
+    return web.json_response(
+        {
+            "ok": True,
+            "login_id": login_id,
+            "status": "waiting_scan",
+            "message": "请使用已登录目标账号的 Telegram 客户端扫描并确认",
+            **qr_login_payload(qr_login),
+        }
+    )
+
+
+async def api_login_qr_poll(request: web.Request) -> web.Response:
+    user = await authenticated(request)
+    await prune_pending_logins(request.app)
+    sessionmaker = request.app["sessionmaker"]
+    data = await request.json()
+    login_id = str(data.get("login_id") or "").strip()
+    password = str(data.get("password") or "").strip() or None
+    key = login_payload_key(user.id, login_id)
+    pending = request.app["pending_logins"].get(key)
+    if not pending or pending.get("method") != "qr":
+        raise web.HTTPBadRequest(text="二维码登录流程不存在或已过期，请重新生成")
+    pending["created_at"] = time.time()
+
+    client = pending["client"]
+    qr_login = pending["qr_login"]
+    try:
+        if pending.get("needs_password"):
+            if not password:
+                return web.json_response(
+                    {
+                        "ok": True,
+                        "status": "needs_password",
+                        "needs_password": True,
+                        "hint": pending.get("password_hint") or "-",
+                        "message": "扫码已确认，请输入目标账号的 2FA 密码",
+                    }
+                )
+            session_str, me = await account_ops.complete_password_login(client, password)
+        else:
+            async with pending["poll_lock"]:
+                remaining = max(
+                    0.1,
+                    (qr_login.expires - datetime.now(UTC)).total_seconds(),
+                )
+                try:
+                    await qr_login.wait(timeout=min(20, remaining))
+                except TimeoutError:
+                    refreshed: dict[str, Any] = {}
+                    if datetime.now(UTC) >= qr_login.expires:
+                        await qr_login.recreate()
+                        refreshed = qr_login_payload(qr_login)
+                    return web.json_response(
+                        {
+                            "ok": True,
+                            "status": "waiting_scan",
+                            "message": "等待扫码确认",
+                            **refreshed,
+                        }
+                    )
+                except SessionPasswordNeededError:
+                    pending["needs_password"] = True
+                    pending["password_hint"] = await login_twofa_hint(client)
+                    return web.json_response(
+                        {
+                            "ok": True,
+                            "status": "needs_password",
+                            "needs_password": True,
+                            "hint": pending["password_hint"],
+                            "message": "扫码已确认，请输入目标账号的 2FA 密码",
+                        }
+                    )
+            session_str, me = await account_ops.finish_authorized_login(client)
+    except PasswordHashInvalidError as exc:
+        raise web.HTTPBadRequest(text="2FA 密码错误") from exc
+    except FloodWaitError as exc:
+        raise web.HTTPTooManyRequests(
+            text=f"尝试过于频繁，请在 {format_wait_deadline(exc.seconds)} 后再试"
+        ) from exc
+    except BadRequestError as exc:
+        await close_pending_login(request.app["pending_logins"].pop(key, None))
+        raise web.HTTPBadRequest(text="登录二维码已失效，请重新生成") from exc
+
+    phone = account_ops.phone_from_user(me)
+    async with sessionmaker() as session:
+        account = await account_ops.save_logged_in_account(
+            session, phone, session_str, me, password
+        )
+        admin = await session.scalar(select(Admin).where(Admin.telegram_user_id == user.id))
+        await audit(session, admin, "webapp_qr_login_account", "account", str(account.id))
+        await session.commit()
+    request.app["pending_logins"].pop(key, None)
+    return web.json_response(
+        {
+            "ok": True,
+            "status": "complete",
+            "account": account_payload(account),
+            "message": f"二维码登录完成：账号 #{account.id} {account.phone_masked}",
+        }
+    )
+
+
+async def api_login_qr_cancel(request: web.Request) -> web.Response:
+    user = await authenticated(request)
+    data = await request.json()
+    login_id = str(data.get("login_id") or "").strip()
+    key = login_payload_key(user.id, login_id)
+    pending = request.app["pending_logins"].get(key)
+    if pending is not None and pending.get("method") == "qr":
+        await close_pending_login(request.app["pending_logins"].pop(key, None))
+    return web.json_response({"ok": True, "message": "二维码登录已取消"})
 
 
 async def api_login_verify(request: web.Request) -> web.Response:
@@ -602,9 +786,10 @@ async def api_login_verify(request: web.Request) -> web.Response:
         raise web.HTTPTooManyRequests(
             text=f"尝试过于频繁，请在 {format_wait_deadline(exc.seconds)} 后再试"
         ) from exc
+    phone = pending.get("phone") or account_ops.phone_from_user(me)
     async with sessionmaker() as session:
         account = await account_ops.save_logged_in_account(
-            session, pending["phone"], session_str, me, password
+            session, phone, session_str, me, password
         )
         admin = await session.scalar(select(Admin).where(Admin.telegram_user_id == user.id))
         await audit(session, admin, "webapp_login_account", "account", str(account.id))
@@ -1489,6 +1674,9 @@ async def create_webapp(
     app.router.add_get("/mini-app/api/accounts", api_accounts)
     app.router.add_post("/mini-app/api/accounts/login/start", api_login_start)
     app.router.add_post("/mini-app/api/accounts/login/verify", api_login_verify)
+    app.router.add_post("/mini-app/api/accounts/login/qr/start", api_login_qr_start)
+    app.router.add_post("/mini-app/api/accounts/login/qr/poll", api_login_qr_poll)
+    app.router.add_post("/mini-app/api/accounts/login/qr/cancel", api_login_qr_cancel)
     app.router.add_post("/mini-app/api/accounts/import-session", api_import_session)
     app.router.add_post("/mini-app/api/accounts/export-sessions", api_export_sessions)
     app.router.add_get("/mini-app/api/accounts/{account_id:\\d+}", api_account_detail)

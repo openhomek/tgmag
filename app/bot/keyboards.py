@@ -21,9 +21,9 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="系统状态"), KeyboardButton(text="账号管理")],
             [
                 KeyboardButton(text="登录账号"),
-                KeyboardButton(text="导入Session"),
-                KeyboardButton(text="导出Session"),
+                KeyboardButton(text="扫码登录"),
             ],
+            [KeyboardButton(text="导入Session"), KeyboardButton(text="导出Session")],
             [KeyboardButton(text="批量导入Session"), KeyboardButton(text="批量任务")],
             [KeyboardButton(text="目标与速率"), KeyboardButton(text="安全防护")],
             [KeyboardButton(text="监控中心")],
@@ -38,6 +38,15 @@ def main_menu() -> ReplyKeyboardMarkup:
 def cancel_inline() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="取消当前操作", callback_data="flow:cancel")]]
+    )
+
+
+def login_phone_panel() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="改用二维码登录", callback_data="login:qr")],
+            [InlineKeyboardButton(text="取消当前操作", callback_data="flow:cancel")],
+        ]
     )
 
 
