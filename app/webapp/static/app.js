@@ -1,10 +1,16 @@
 const tg = window.Telegram?.WebApp;
 const INIT_DATA_SESSION_KEY = "tgmag.telegramInitData";
+const ACCOUNT_PAGE_SIZE = 10;
 const state = {
   bootstrap: null,
   activeView: "dashboard",
   activePane: "phone",
   activeAccountId: null,
+  accountPage: 1,
+  accountPages: 0,
+  accountTotal: 0,
+  accountQuery: "",
+  accountRequestGeneration: 0,
   noticeTimer: null,
   qrLoginGeneration: 0,
   qrLoginId: null,
@@ -237,7 +243,7 @@ function renderBootstrap(data) {
   state.bootstrap = data;
   const status = data.status;
   qs("#metricAccounts").textContent = status.accounts;
-  qs("#metricUsable").textContent = `${status.usable} 个 active`;
+  qs("#metricUsable").textContent = `${status.usable} 个 active · 上限 50`;
   qs("#metricConnected").textContent = status.connected;
   qs("#connectedHint").textContent = `${status.connected}/${status.usable} 个 active 已连接`;
   const monitorRunning = Boolean(status.monitor_enabled && status.monitor_running);
@@ -249,19 +255,45 @@ function renderBootstrap(data) {
   qs("#sidebarStatus").textContent = monitorRunning ? "服务与监听在线" : "服务在线，监听未运行";
   qs(".live-dot")?.classList.toggle("online", monitorRunning);
 
+  const recentAccounts = data.recent_accounts || [];
   const recent = qs("#recentAccounts");
-  recent.replaceChildren(...data.accounts.slice(0, 6).map((account) => accountRow(account, true)));
-  if (!data.accounts.length) recent.innerHTML = '<div class="empty-state">还没有账号，先添加一个账号</div>';
-  renderAccounts(data.accounts);
+  recent.replaceChildren(...recentAccounts.map((account) => accountRow(account, true)));
+  if (!recentAccounts.length) recent.innerHTML = '<div class="empty-state">还没有账号，先添加一个账号</div>';
   renderTargets(data.targets);
   renderRates(data.rates);
 }
 
-function renderAccounts(accounts) {
+function renderAccounts(accounts, pagination) {
   const list = qs("#accountsList");
   list.replaceChildren(...accounts.map((account) => accountRow(account)));
-  qs("#accountCount").textContent = `共 ${accounts.length} 个账号`;
+  state.accountPage = Number(pagination.page || 1);
+  state.accountPages = Number(pagination.pages || 0);
+  state.accountTotal = Number(pagination.total || 0);
+  const pageText = state.accountPages ? ` · 第 ${state.accountPage}/${state.accountPages} 页` : "";
+  qs("#accountCount").textContent = `共 ${state.accountTotal} 个账号${pageText}`;
   if (!accounts.length) list.innerHTML = '<div class="panel empty-state">没有匹配的账号</div>';
+  const pager = qs("#accountPagination");
+  pager.classList.toggle("hidden", state.accountPages <= 1);
+  qs("#accountPageIndicator").textContent = `第 ${state.accountPage} / ${Math.max(state.accountPages, 1)} 页`;
+  qs("#accountPrevPage").disabled = state.accountPage <= 1;
+  qs("#accountNextPage").disabled = state.accountPage >= state.accountPages;
+}
+
+async function loadAccountPage(page = 1, { query = null, scroll = false } = {}) {
+  const generation = ++state.accountRequestGeneration;
+  const normalizedQuery = query === null ? qs("#accountSearch").value.trim() : query.trim();
+  state.accountQuery = normalizedQuery;
+  const params = new URLSearchParams({ page: String(page) });
+  if (normalizedQuery) params.set("q", normalizedQuery);
+  const data = await api(`/accounts?${params}`);
+  if (generation !== state.accountRequestGeneration) return;
+  renderAccounts(data.accounts, data.pagination || {
+    page: 1,
+    page_size: ACCOUNT_PAGE_SIZE,
+    pages: data.accounts.length ? 1 : 0,
+    total: data.accounts.length,
+  });
+  if (scroll) qs("#accountBrowser")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderTargets(targets) {
@@ -309,6 +341,7 @@ async function loadBootstrap({ quiet = false } = {}) {
   try {
     const data = await api("/bootstrap");
     renderBootstrap(data);
+    await loadAccountPage(state.accountPage);
     if (!quiet) showNotice("");
     loadJobs();
   } catch (error) {
@@ -404,9 +437,7 @@ async function searchAccounts() {
   const button = qs("#searchBtn");
   setBusy(button, true, "搜索中…");
   try {
-    const query = encodeURIComponent(qs("#accountSearch").value.trim());
-    const data = await api(`/accounts?q=${query}`);
-    renderAccounts(data.accounts);
+    await loadAccountPage(1, { scroll: true });
   } catch (error) {
     showNotice(`搜索失败：${error.message}`, "error");
   } finally {
@@ -899,8 +930,18 @@ qs("#securityCheckBtn").addEventListener("click", runSecurityCheck);
 qs("#monitorToggleBtn").addEventListener("click", toggleMonitor);
 qs("#reloadJobsBtn").addEventListener("click", loadJobs);
 qs("#searchBtn").addEventListener("click", searchAccounts);
-qs("#accountSearch").addEventListener("input", (event) => { if (!event.currentTarget.value) renderAccounts(state.bootstrap?.accounts || []); });
+qs("#accountSearch").addEventListener("input", (event) => {
+  if (!event.currentTarget.value) loadAccountPage(1, { query: "" }).catch((error) => showNotice(`加载账号失败：${error.message}`, "error"));
+});
 qs("#accountSearch").addEventListener("keydown", (event) => { if (event.key === "Enter") searchAccounts(); });
+qs("#accountPrevPage").addEventListener("click", () => {
+  loadAccountPage(state.accountPage - 1, { query: state.accountQuery, scroll: true })
+    .catch((error) => showNotice(`翻页失败：${error.message}`, "error"));
+});
+qs("#accountNextPage").addEventListener("click", () => {
+  loadAccountPage(state.accountPage + 1, { query: state.accountQuery, scroll: true })
+    .catch((error) => showNotice(`翻页失败：${error.message}`, "error"));
+});
 qs("#batchForm").addEventListener("submit", submitBatch);
 qs("#batchForm [name=type]").addEventListener("change", batchFieldMode);
 qs("#phoneLoginForm").addEventListener("submit", submitPhoneLogin);

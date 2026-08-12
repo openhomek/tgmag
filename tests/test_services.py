@@ -22,7 +22,7 @@ from app.services.qr_code import login_qr_png
 from app.services.rate_limit import validate_rate_values
 from app.services.security_health import SecurityHealthCheck, SecurityHealthReport
 from app.services.targets import canonicalize_target_ref, telegram_invite_hash
-from app.tg import batch_ops
+from app.tg import account_ops, batch_ops
 from app.tg.account_ops import phone_from_user
 
 
@@ -43,6 +43,33 @@ def test_qr_login_phone_is_normalized_from_telegram_user() -> None:
     assert phone_from_user(SimpleNamespace(phone="447700900123")) == "+447700900123"
     with pytest.raises(ValueError, match="未返回账号手机号"):
         phone_from_user(SimpleNamespace(phone=None))
+
+
+def test_account_save_rejects_the_fifty_first_account() -> None:
+    session = SimpleNamespace(
+        execute=AsyncMock(),
+        scalar=AsyncMock(side_effect=[None, 50]),
+        scalars=AsyncMock(return_value=SimpleNamespace(all=list)),
+    )
+    user = SimpleNamespace(
+        id=999001,
+        username="capacity_test",
+        first_name="Capacity",
+        last_name="Test",
+    )
+
+    with pytest.raises(ValueError, match="50 个"):
+        asyncio.run(
+            account_ops.save_logged_in_account(
+                session,
+                "+447700900999",
+                "test-session",
+                user,
+            )
+        )
+
+    session.execute.assert_awaited_once()
+    assert session.scalar.await_count == 2
 
 
 def test_target_canonicalization() -> None:

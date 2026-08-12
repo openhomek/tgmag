@@ -89,26 +89,48 @@ def account_button_label(account: TgAccount) -> str:
     return f"#{account.id} · {identity}"
 
 
-def accounts_panel(accounts: list[TgAccount]) -> InlineKeyboardMarkup:
+def accounts_panel(
+    accounts: list[TgAccount],
+    page: int = 1,
+    pages: int = 1,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    for account in accounts[:20]:
+    for account in accounts:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=account_button_label(account), callback_data=f"acct:{account.id}"
+                    text=account_button_label(account),
+                    callback_data=f"acct:{account.id}:{page}",
                 )
+            ]
+        )
+    if pages > 1:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="‹ 上一页",
+                    callback_data=f"nav:accounts:{max(page - 1, 1)}",
+                ),
+                InlineKeyboardButton(
+                    text=f"{page}/{pages}",
+                    callback_data=f"nav:accounts:{page}",
+                ),
+                InlineKeyboardButton(
+                    text="下一页 ›",
+                    callback_data=f"nav:accounts:{min(page + 1, pages)}",
+                ),
             ]
         )
     rows.append(
         [
-            InlineKeyboardButton(text="刷新", callback_data="nav:accounts"),
+            InlineKeyboardButton(text="刷新", callback_data=f"nav:accounts:{page}"),
             InlineKeyboardButton(text="返回", callback_data="nav:home"),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def account_actions_panel(account_id: int) -> InlineKeyboardMarkup:
+def account_actions_panel(account_id: int, accounts_page: int = 1) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -161,7 +183,9 @@ def account_actions_panel(account_id: int) -> InlineKeyboardMarkup:
                 ),
             ],
             [
-                InlineKeyboardButton(text="返回列表", callback_data="nav:accounts"),
+                InlineKeyboardButton(
+                    text="返回列表", callback_data=f"nav:accounts:{accounts_page}"
+                ),
             ],
         ]
     )

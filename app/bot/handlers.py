@@ -101,6 +101,7 @@ from app.services.login_email_protection import (
     set_selected_domain,
     set_whitelisted,
 )
+from app.services.pagination import ACCOUNT_PAGE_SIZE, account_page_window
 from app.services.qr_code import login_qr_png
 from app.services.rate_limit import RateGate, get_rate, validate_rate_values
 from app.services.security_health import run_security_health_check
@@ -511,12 +512,23 @@ def login_email_runtime_status(
     return "基础链路就绪（待全链路检测）"
 
 
-async def accounts_text_and_rows(sessionmaker: async_sessionmaker[AsyncSession]) -> tuple[str, list[TgAccount]]:
+async def accounts_text_and_rows(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    requested_page: int = 1,
+) -> tuple[str, list[TgAccount], int, int]:
     async with sessionmaker() as session:
-        rows = await session.scalars(select(TgAccount).order_by(TgAccount.id).limit(100))
+        total = int(await session.scalar(select(func.count()).select_from(TgAccount)) or 0)
+        page, pages, offset = account_page_window(total, requested_page)
+        rows = await session.scalars(
+            select(TgAccount)
+            .order_by(TgAccount.id)
+            .offset(offset)
+            .limit(ACCOUNT_PAGE_SIZE)
+        )
         accounts_list = list(rows.all())
     lines = [account_line(row) for row in accounts_list]
-    return "账号列表\n" + ("\n".join(lines) if lines else "暂无账号"), accounts_list
+    heading = f"账号列表 · 第 {page}/{max(pages, 1)} 页 · 共 {total} 个"
+    return heading + "\n" + ("\n".join(lines) if lines else "暂无账号"), accounts_list, page, pages
 
 
 async def account_detail_text(session: AsyncSession, account_id: int) -> str:
@@ -1210,8 +1222,11 @@ async def export_session_selection(
 
 @router.message(Command("accounts"))
 async def accounts(message: Message, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
-    text, accounts_list = await accounts_text_and_rows(sessionmaker)
-    await message.answer(text, reply_markup=accounts_panel(accounts_list))
+    text, accounts_list, page, pages = await accounts_text_and_rows(sessionmaker)
+    await message.answer(
+        text,
+        reply_markup=accounts_panel(accounts_list, page, pages),
+    )
 
 
 @router.message(Command("account", "profile"))
@@ -1679,8 +1694,11 @@ async def menu_text_command(
     if action == "status":
         await message.answer(await status_text(sessionmaker, client_pool), reply_markup=main_menu())
     elif action == "accounts":
-        text, accounts_list = await accounts_text_and_rows(sessionmaker)
-        await message.answer(text, reply_markup=accounts_panel(accounts_list))
+        text, accounts_list, page, pages = await accounts_text_and_rows(sessionmaker)
+        await message.answer(
+            text,
+            reply_markup=accounts_panel(accounts_list, page, pages),
+        )
     elif action == "login":
         await login_start(message, state)
     elif action == "qr_login":
@@ -1719,14 +1737,25 @@ async def nav_callback(
     sessionmaker: async_sessionmaker[AsyncSession],
     client_pool: ClientPool,
 ) -> None:
-    target = (callback.data or "").split(":", 1)[1]
+    parts = (callback.data or "").split(":")
+    target = parts[1]
     if target == "home":
         await dismiss_panel(callback)
     elif target == "status":
         await answer_panel(callback, await status_text(sessionmaker, client_pool), main_menu())
     elif target == "accounts":
-        text, accounts_list = await accounts_text_and_rows(sessionmaker)
-        await answer_panel(callback, text, accounts_panel(accounts_list))
+        try:
+            requested_page = int(parts[2]) if len(parts) > 2 else 1
+        except ValueError:
+            requested_page = 1
+        text, accounts_list, page, pages = await accounts_text_and_rows(
+            sessionmaker, max(requested_page, 1)
+        )
+        await answer_panel(
+            callback,
+            text,
+            accounts_panel(accounts_list, page, pages),
+        )
     elif target == "batch":
         await answer_panel(callback, "批量任务入口", batch_panel())
     elif target == "settings":
@@ -1780,10 +1809,16 @@ async def account_callback(
     callback: CallbackQuery,
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
-    account_id = int((callback.data or "").split(":", 1)[1])
+    parts = (callback.data or "").split(":")
+    account_id = int(parts[1])
+    accounts_page = int(parts[2]) if len(parts) > 2 else 1
     async with sessionmaker() as session:
         text = await account_detail_text(session, account_id)
-    await answer_panel(callback, text, account_actions_panel(account_id))
+    await answer_panel(
+        callback,
+        text,
+        account_actions_panel(account_id, accounts_page),
+    )
 
 
 @router.callback_query(F.data.startswith("acct_action:"))

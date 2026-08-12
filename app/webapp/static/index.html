@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <title>TGMAG 控制台</title>
-    <link rel="stylesheet" href="/mini-app/static/styles.css?v=20260812-ui4" />
+    <link rel="stylesheet" href="/mini-app/static/styles.css?v=20260813-pagination1" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body data-view="dashboard">
@@ -93,6 +93,11 @@
               <p id="accountCount" class="muted">账号列表</p>
               <button class="link-button" type="button" data-view-jump="actions" data-action-pane="export">导出 Session</button>
             </div>
+            <nav id="accountPagination" class="pagination hidden" aria-label="账号分页">
+              <button id="accountPrevPage" class="secondary-button" type="button">上一页</button>
+              <span id="accountPageIndicator" aria-live="polite">第 1 / 1 页</span>
+              <button id="accountNextPage" class="secondary-button" type="button">下一页</button>
+            </nav>
             <div id="accountsList" class="account-grid"></div>
           </div>
           <section id="accountDetail" class="detail-page hidden"></section>
@@ -203,6 +208,6 @@
         <button class="tab" type="button" data-view="settings"><span>⚙</span><small>设置</small></button>
       </nav>
     </div>
-    <script src="/mini-app/static/app.js?v=20260812-ui4"></script>
+    <script src="/mini-app/static/app.js?v=20260813-pagination1"></script>
   </body>
 </html>

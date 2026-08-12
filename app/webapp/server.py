@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import web
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import String, cast, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telethon import functions
 from telethon.errors import (
@@ -51,6 +51,7 @@ from app.services.login_email_protection import (
     login_email_wait_remaining,
     parse_login_email_window_hours,
 )
+from app.services.pagination import ACCOUNT_PAGE_SIZE, account_page_window
 from app.services.qr_code import login_qr_png
 from app.services.rate_limit import RateGate, get_rate, validate_rate_values
 from app.services.security_health import SecurityHealthReport, run_security_health_check
@@ -329,8 +330,12 @@ async def api_bootstrap(request: web.Request) -> web.Response:
                 TgSession.is_active.is_(True)
             )
         )
-        accounts = list(
-            (await session.scalars(select(TgAccount).order_by(TgAccount.id).limit(50))).all()
+        recent_accounts = list(
+            (
+                await session.scalars(
+                    select(TgAccount).order_by(TgAccount.id.desc()).limit(6)
+                )
+            ).all()
         )
         targets = list(
             (await session.scalars(select(AllowedTarget).order_by(AllowedTarget.id))).all()
@@ -356,7 +361,7 @@ async def api_bootstrap(request: web.Request) -> web.Response:
                 "running_jobs": running_jobs or 0,
                 "server_time": datetime.now(UTC).isoformat(),
             },
-            "accounts": [account_payload(account) for account in accounts],
+            "recent_accounts": [account_payload(account) for account in recent_accounts],
             "targets": [
                 {
                     "id": target.id,
@@ -477,24 +482,56 @@ async def api_jobs(request: web.Request) -> web.Response:
     return web.json_response({"jobs": payload})
 
 
+def account_pagination(total: int, requested_page: int) -> tuple[int, int, int]:
+    return account_page_window(total, requested_page)
+
+
 async def api_accounts(request: web.Request) -> web.Response:
     await authenticated(request)
     sessionmaker = request.app["sessionmaker"]
     query = (request.query.get("q") or "").strip()
-    async with sessionmaker() as session:
-        statement = select(TgAccount).order_by(TgAccount.id).limit(200)
-        rows = list((await session.scalars(statement)).all())
+    try:
+        requested_page = int(request.query.get("page", "1"))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text="page must be an integer") from exc
+    if requested_page < 1:
+        raise web.HTTPBadRequest(text="page must be at least 1")
+    conditions = []
     if query:
-        query_lower = query.lower()
-        rows = [
-            account
-            for account in rows
-            if query_lower in str(account.id)
-            or query_lower in account.phone_masked.lower()
-            or query_lower in str(account.user_id or "")
-            or query_lower in (account.username or "").lower()
-        ]
-    return web.json_response({"accounts": [account_payload(row) for row in rows]})
+        pattern = f"%{query}%"
+        conditions.append(
+            or_(
+                cast(TgAccount.id, String).ilike(pattern),
+                TgAccount.phone_masked.ilike(pattern),
+                cast(TgAccount.user_id, String).ilike(pattern),
+                TgAccount.username.ilike(pattern),
+            )
+        )
+    async with sessionmaker() as session:
+        total_statement = select(func.count()).select_from(TgAccount)
+        statement = select(TgAccount)
+        if conditions:
+            total_statement = total_statement.where(*conditions)
+            statement = statement.where(*conditions)
+        total = int(await session.scalar(total_statement) or 0)
+        page, pages, offset = account_pagination(total, requested_page)
+        statement = (
+            statement.order_by(TgAccount.id)
+            .offset(offset)
+            .limit(ACCOUNT_PAGE_SIZE)
+        )
+        rows = list((await session.scalars(statement)).all())
+    return web.json_response(
+        {
+            "accounts": [account_payload(row) for row in rows],
+            "pagination": {
+                "page": page,
+                "page_size": ACCOUNT_PAGE_SIZE,
+                "pages": pages,
+                "total": total,
+            },
+        }
+    )
 
 
 async def api_login_start(request: web.Request) -> web.Response:

@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient, functions, types
 from telethon.errors import SessionPasswordNeededError
@@ -24,6 +24,7 @@ from app.db.models import (
     TgSession,
 )
 from app.services.crypto import decrypt_text, encrypt_text, mask_phone
+from app.services.pagination import require_account_capacity
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,9 @@ async def save_logged_in_account(
     me: types.User,
     twofa_password: str | None = None,
 ) -> TgAccount:
+    # Serialize account creation so concurrent login/import flows cannot cross
+    # the system-wide account limit together. This is a PostgreSQL transaction lock.
+    await session.execute(text("SELECT pg_advisory_xact_lock(84502117)"))
     account = await session.scalar(select(TgAccount).where(TgAccount.user_id == me.id))
     if account is None:
         phone_masked = mask_phone(phone)
@@ -152,6 +156,8 @@ async def save_logged_in_account(
             None,
         )
         if account is None:
+            total = int(await session.scalar(select(func.count()).select_from(TgAccount)) or 0)
+            require_account_capacity(total)
             account = TgAccount(phone_encrypted=encrypt_text(phone), phone_masked=phone_masked)
             session.add(account)
             await session.flush()
@@ -164,7 +170,7 @@ async def save_logged_in_account(
     account.last_name = me.last_name
     if account.status in {"new", "active", "session_invalid"}:
         account.status = STATUS_UNKNOWN
-    account.last_login_at = datetime.now(timezone.utc)
+    account.last_login_at = datetime.now(UTC)
     account.last_error = None
     await session.execute(
         update(TgSession).where(TgSession.account_id == account.id).values(is_active=False)
@@ -208,7 +214,7 @@ async def sync_me(session: AsyncSession, account: TgAccount, client: TelegramCli
     account.last_name = me.last_name
     if account.status in {"new", "active"}:
         account.status = STATUS_UNKNOWN
-    account.last_login_at = datetime.now(timezone.utc)
+    account.last_login_at = datetime.now(UTC)
     account.last_error = None
     await session.commit()
     return account
@@ -341,7 +347,16 @@ async def service_check(session: AsyncSession, account_id: int, client: Telegram
     inserted = 0
     for msg in messages:
         text = msg.message or ""
-        inserted += int(await save_service_message(session, account_id, 777000, msg.id, text, msg.date or datetime.now(timezone.utc)))
+        inserted += int(
+            await save_service_message(
+                session,
+                account_id,
+                777000,
+                msg.id,
+                text,
+                msg.date or datetime.now(UTC),
+            )
+        )
     await session.commit()
     return inserted
 

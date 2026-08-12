@@ -9,7 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.login_email_protection import parse_login_email_window_hours
-from app.webapp.server import qr_login_payload, reusable_phone_login
+from app.services.pagination import require_account_capacity
+from app.webapp.server import account_pagination, qr_login_payload, reusable_phone_login
 
 
 @pytest.mark.parametrize(
@@ -64,16 +65,41 @@ def test_recent_phone_login_is_reused_without_requesting_another_code() -> None:
     assert reusable_phone_login(app, 8, "+447700900123") is None
 
 
+@pytest.mark.parametrize(
+    ("total", "requested", "expected"),
+    [
+        (0, 1, (1, 0, 0)),
+        (10, 1, (1, 1, 0)),
+        (11, 2, (2, 2, 10)),
+        (25, 99, (3, 3, 20)),
+    ],
+)
+def test_account_pagination_uses_ten_accounts_per_page(
+    total: int,
+    requested: int,
+    expected: tuple[int, int, int],
+) -> None:
+    assert account_pagination(total, requested) == expected
+
+
+def test_system_account_limit_is_fifty() -> None:
+    require_account_capacity(49)
+    with pytest.raises(ValueError, match="50 个"):
+        require_account_capacity(50)
+
+
 def test_mini_app_actions_enable_compact_view_specific_layout() -> None:
     index = Path("app/webapp/static/index.html").read_text(encoding="utf-8")
     script = Path("app/webapp/static/app.js").read_text(encoding="utf-8")
     styles = Path("app/webapp/static/styles.css").read_text(encoding="utf-8")
 
     assert '<body data-view="dashboard">' in index
-    assert "20260812-ui4" in index
+    assert "20260813-pagination1" in index
     assert "document.body.dataset.view = view" in script
     assert "tg.disableVerticalSwipes?.()" in script
     assert 'height: var(--tg-viewport-stable-height, 100dvh)' in styles
     assert "overflow-y: auto" in styles
     assert 'const shell = qs(".shell")' in script
     assert 'body[data-view="actions"] .action-pane .panel' in styles
+    assert "const ACCOUNT_PAGE_SIZE = 10" in script
+    assert 'id="accountPagination"' in index

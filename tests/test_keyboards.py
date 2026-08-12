@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.bot.keyboards import (
+    accounts_panel,
     bot_menu_button,
     login_email_account_panel,
     login_email_domains_panel,
@@ -73,6 +74,35 @@ def test_main_navigation_labels_are_reply_keyboard_buttons() -> None:
         "安全防护",
     }
     assert len(main_menu().keyboard) == 3
+
+
+def test_account_inline_keyboard_pages_ten_accounts_and_preserves_page() -> None:
+    accounts = [
+        type(
+            "Account",
+            (),
+            {
+                "id": account_id,
+                "user_id": 1000 + account_id,
+                "username": None,
+                "phone_masked": "+44****123",
+            },
+        )()
+        for account_id in range(11, 21)
+    ]
+
+    panel = accounts_panel(accounts, page=2, pages=4)
+    account_buttons = [row[0] for row in panel.inline_keyboard[:10]]
+
+    assert len(account_buttons) == 10
+    assert account_buttons[0].callback_data == "acct:11:2"
+    assert account_buttons[-1].callback_data == "acct:20:2"
+    pager = panel.inline_keyboard[10]
+    assert [button.callback_data for button in pager] == [
+        "nav:accounts:1",
+        "nav:accounts:2",
+        "nav:accounts:3",
+    ]
 
 
 def test_advanced_features_stay_out_of_reply_keyboard() -> None:
