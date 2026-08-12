@@ -182,6 +182,10 @@ input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--mute
 .secondary-button { background: var(--soft-accent); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 13%, var(--line)); }
 .link-button { background: transparent; color: var(--link); padding-inline: 7px; }
 .danger-button { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, var(--surface)); border-color: color-mix(in srgb, var(--danger) 15%, var(--line)); }
+.account-danger-zone { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 18px; padding: 16px; border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line)); border-radius: 15px; background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
+.account-danger-zone h3 { margin: 0 0 5px; color: var(--danger); font-size: 14px; }
+.account-danger-zone p { margin: 0; max-width: 590px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.account-danger-zone .danger-button { flex: 0 0 auto; }
 button:disabled { opacity: .55; cursor: wait; }
 .form-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 10px; }
 .form-divider::before, .form-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
@@ -277,6 +281,8 @@ button:disabled { opacity: .55; cursor: wait; }
   .detail-header { align-items: flex-start; }
   .detail-summary { gap: 8px; }
   .detail-stat { padding: 12px; }
+  .account-danger-zone { display: grid; gap: 12px; }
+  .account-danger-zone .danger-button { width: 100%; }
   .segmented { margin-inline: -2px; }
   .segment { min-width: 96px; padding-inline: 10px; }
   .qr-login-box { gap: 9px; padding: 9px; }

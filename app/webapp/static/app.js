@@ -516,7 +516,11 @@ function renderAccountDetail(account) {
         <form id="loginEmailForm" class="form"><label><span>新登录邮箱</span><input name="email" type="email" /></label><label><span>邮箱验证码</span><input name="code" inputmode="numeric" autocomplete="one-time-code" /></label><div class="button-row"><button class="secondary-button" type="submit" data-action="send">发送验证码</button><button class="primary-button" type="submit" data-action="confirm">确认验证码</button></div></form>
       </div></details>
       <details class="detail-section"><summary>Telegram 服务消息</summary><div class="detail-section-body"><button class="secondary-button" id="loadServiceMessagesBtn" type="button">加载最近消息</button><div id="serviceMessagesList" class="list"></div></div></details>
-    </div>`;
+    </div>
+    <section class="account-danger-zone" aria-labelledby="deleteAccountTitle">
+      <div><h3 id="deleteAccountTitle">危险操作</h3><p>永久删除这个账号在本系统中的 Session、资料、安全设置、服务消息、保护记录及批量任务项。此操作不可撤销。</p></div>
+      <button class="secondary-button danger-button" id="deleteAccountBtn" type="button">删除该账号及全部数据</button>
+    </section>`;
   qs(".back-button", detail).addEventListener("click", () => closeAccountDetail());
   qsa("[data-account-action]", detail).forEach((button) => button.addEventListener("click", () => {
     const action = button.dataset.accountAction;
@@ -530,6 +534,26 @@ function renderAccountDetail(account) {
   qs("#loginEmailWindowForm", detail).addEventListener("submit", (event) => submitLoginEmailWindow(event, account.id));
   qs("#loginEmailForm", detail).addEventListener("submit", (event) => submitLoginEmail(event, account.id));
   qs("#loadServiceMessagesBtn", detail).addEventListener("click", (event) => loadServiceMessages(account.id, event.currentTarget));
+  qs("#deleteAccountBtn", detail).addEventListener("click", (event) => deleteAccount(account, event.currentTarget));
+}
+
+async function deleteAccount(account, button) {
+  const label = account.username ? `@${account.username}` : account.phone_masked;
+  const firstConfirmed = await confirmAction(`确认要删除账号 #${account.id}（${label}）吗？\n\n系统将删除该账号的全部关联数据。`);
+  if (!firstConfirmed) return;
+  const finalConfirmed = await confirmAction(`最后确认：永久删除账号 #${account.id}，操作无法撤销。是否继续？`);
+  if (!finalConfirmed) return;
+
+  setBusy(button, true, "正在永久删除…");
+  try {
+    const data = await api(`/accounts/${account.id}`, { method: "DELETE" });
+    closeAccountDetail(false);
+    await loadBootstrap({ quiet: true });
+    showNotice(data.message || `账号 #${account.id} 已删除`, "ok");
+  } catch (error) {
+    showNotice(`删除失败：${error.message}`, "error");
+    setBusy(button, false);
+  }
 }
 
 async function submitPhoneLogin(event) {

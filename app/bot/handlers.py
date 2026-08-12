@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import shlex
-import asyncio
 import tempfile
 import urllib.request
 import uuid
@@ -22,21 +22,23 @@ from aiogram.types import (
 )
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from telethon.errors import PasswordHashInvalidError, SessionPasswordNeededError
+from telethon import functions
 from telethon.errors import (
     FloodWaitError,
+    PasswordHashInvalidError,
     PhoneCodeEmptyError,
     PhoneCodeExpiredError,
     PhoneCodeInvalidError,
     PhoneNumberBannedError,
     PhoneNumberInvalidError,
+    SessionPasswordNeededError,
 )
-from telethon import functions
 
 from app.bot.auth import AdminOnlyMiddleware
 from app.bot.formatting import COMMANDS, account_line
 from app.bot.keyboards import (
     account_actions_panel,
+    account_delete_confirm_panel,
     accounts_panel,
     avatar_panel,
     batch_panel,
@@ -65,9 +67,9 @@ from app.bot.states import (
     ExportSessionFlow,
     ImportSessionFlow,
     ImportSessionsFlow,
-    LoginFlow,
     LoginEmailDomainFlow,
     LoginEmailWindowFlow,
+    LoginFlow,
     ProfileEditFlow,
     TwoFAEditFlow,
 )
@@ -76,18 +78,19 @@ from app.db.models import (
     AccountSecurity,
     Admin,
     AllowedTarget,
+    Job,
+    LoginEmailProtectionEvent,
+    LoginEmailWhitelist,
     PrivacySettings,
     RateLimit,
     SpamCheck,
     TgAccount,
     TgSession,
-    Job,
-    LoginEmailProtectionEvent,
-    LoginEmailWhitelist,
 )
-from app.services.crypto import decrypt_text
+from app.services.account_deletion import delete_account_records
 from app.services.audit import audit
 from app.services.backups import create_database_backup_async
+from app.services.crypto import decrypt_text
 from app.services.jobs import add_job_item, create_job, finish_job
 from app.services.login_email_protection import (
     add_available_domain,
@@ -1819,6 +1822,72 @@ async def account_callback(
         text,
         account_actions_panel(account_id, accounts_page),
     )
+
+
+@router.callback_query(F.data.startswith("acct_delete:"))
+async def account_delete_callback(
+    callback: CallbackQuery,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    client_pool: ClientPool,
+) -> None:
+    _, stage, account_id_raw, accounts_page_raw = (callback.data or "").split(":", 3)
+    account_id = int(account_id_raw)
+    accounts_page = max(int(accounts_page_raw), 1)
+
+    if stage in {"ask", "verify"}:
+        async with sessionmaker() as session:
+            account = await session.get(TgAccount, account_id)
+            if account is None:
+                await answer_panel(callback, "账号不存在或已被删除。", main_menu())
+                return
+            identity = account_line(account)
+        if stage == "ask":
+            text = (
+                f"删除账号（第一次确认）\n{identity}\n\n"
+                "将永久清除该账号在本系统中的 Session、资料、安全设置、服务消息、保护记录和批量任务项。"
+            )
+            panel = account_delete_confirm_panel(account_id, accounts_page)
+        else:
+            text = (
+                f"删除账号（最后确认）\n{identity}\n\n"
+                "此操作不可撤销。确认永久删除且不影响其他账号？"
+            )
+            panel = account_delete_confirm_panel(account_id, accounts_page, final=True)
+        await answer_panel(callback, text, panel)
+        return
+
+    if stage != "confirm":
+        await callback.answer("未知删除操作", show_alert=True)
+        return
+
+    await callback.answer("正在安全删除…")
+    if not callback.message:
+        return
+    try:
+        await client_pool.begin_account_deletion(account_id)
+        try:
+            async with sessionmaker() as session:
+                admin = await session.scalar(
+                    select(Admin).where(Admin.telegram_user_id == callback.from_user.id)
+                )
+                try:
+                    result = await delete_account_records(session, account_id, admin)
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    raise
+        finally:
+            await client_pool.end_account_deletion(account_id)
+        text, rows, page, pages = await accounts_text_and_rows(sessionmaker, accounts_page)
+        message = f"账号 #{result.account_id} 已从系统永久删除。\n\n{text}"
+        panel = accounts_panel(rows, page, pages)
+    except Exception as exc:
+        message = f"删除失败：{exc}"
+        panel = account_actions_panel(account_id, accounts_page)
+    try:
+        await callback.message.edit_text(message, reply_markup=panel)
+    except TelegramBadRequest:
+        await callback.message.answer(message, reply_markup=panel)
 
 
 @router.callback_query(F.data.startswith("acct_action:"))

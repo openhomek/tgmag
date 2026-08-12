@@ -489,6 +489,22 @@ class LoginEmailProtector:
         lock = self._change_locks.get(account_id)
         return lock is not None and lock.locked()
 
+    async def cancel_account_tasks(self, account_id: int, event_ids: set[int]) -> None:
+        """Cancel protection waiters and forget per-account synchronization state."""
+        tasks = {
+            task
+            for event_id, task in self._window_waiters.items()
+            if event_id in event_ids and not task.done()
+        }
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for event_id in event_ids:
+            self._window_waiters.pop(event_id, None)
+        self._account_locks.pop(account_id, None)
+        self._change_locks.pop(account_id, None)
+
     async def _notify(
         self,
         text: str,

@@ -43,6 +43,7 @@ from app.db.models import (
     TgAccount,
     TgSession,
 )
+from app.services.account_deletion import delete_account_records
 from app.services.audit import audit
 from app.services.crypto import decrypt_text, encrypt_text
 from app.services.jobs import add_job_item, create_job, finish_job
@@ -953,6 +954,42 @@ async def api_account_detail(request: web.Request) -> web.Response:
     return web.json_response({"account": payload})
 
 
+async def api_account_delete(request: web.Request) -> web.Response:
+    user = await authenticated(request)
+    sessionmaker = request.app["sessionmaker"]
+    client_pool: ClientPool = request.app["client_pool"]
+    account_id = int(request.match_info["account_id"])
+
+    await client_pool.begin_account_deletion(account_id)
+    try:
+        async with sessionmaker() as session:
+            admin = await session.scalar(
+                select(Admin).where(Admin.telegram_user_id == user.id)
+            )
+            try:
+                result = await delete_account_records(session, account_id, admin)
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+    finally:
+        await client_pool.end_account_deletion(account_id)
+
+    account_key_suffix = f":{account_id}"
+    for store_name in ("pending_twofa", "pending_login_email"):
+        store = request.app.get(store_name, {})
+        for key in [value for value in store if str(value).endswith(account_key_suffix)]:
+            store.pop(key, None)
+
+    return web.json_response(
+        {
+            "ok": True,
+            "message": f"账号 #{result.account_id} 已从系统永久删除",
+            "deleted_rows": result.deleted_rows,
+        }
+    )
+
+
 async def api_account_action(request: web.Request) -> web.Response:
     user = await authenticated(request)
     sessionmaker = request.app["sessionmaker"]
@@ -1716,6 +1753,7 @@ async def create_webapp(
     app.router.add_post("/mini-app/api/accounts/import-session", api_import_session)
     app.router.add_post("/mini-app/api/accounts/export-sessions", api_export_sessions)
     app.router.add_get("/mini-app/api/accounts/{account_id:\\d+}", api_account_detail)
+    app.router.add_delete("/mini-app/api/accounts/{account_id:\\d+}", api_account_delete)
     app.router.add_post("/mini-app/api/accounts/{account_id:\\d+}/action", api_account_action)
     app.router.add_post(
         "/mini-app/api/accounts/{account_id:\\d+}/profile", api_account_profile_update

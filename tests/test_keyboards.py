@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.bot.keyboards import (
+    account_actions_panel,
+    account_delete_confirm_panel,
     accounts_panel,
     bot_menu_button,
     login_email_account_panel,
@@ -103,6 +105,22 @@ def test_account_inline_keyboard_pages_ten_accounts_and_preserves_page() -> None
         "nav:accounts:2",
         "nav:accounts:3",
     ]
+
+
+def test_account_deletion_uses_two_confirmations_and_preserves_page() -> None:
+    actions = {
+        button.callback_data
+        for row in account_actions_panel(17, accounts_page=3).inline_keyboard
+        for button in row
+    }
+    first = account_delete_confirm_panel(17, 3)
+    second = account_delete_confirm_panel(17, 3, final=True)
+
+    assert "acct_delete:ask:17:3" in actions
+    assert first.inline_keyboard[0][0].callback_data == "acct_delete:verify:17:3"
+    assert second.inline_keyboard[0][0].callback_data == "acct_delete:confirm:17:3"
+    assert first.inline_keyboard[1][0].callback_data == "acct:17:3"
+    assert second.inline_keyboard[1][0].callback_data == "acct:17:3"
 
 
 def test_advanced_features_stay_out_of_reply_keyboard() -> None:

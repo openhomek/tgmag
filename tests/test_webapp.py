@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import time
 from datetime import UTC, datetime, timedelta
@@ -10,7 +11,12 @@ import pytest
 
 from app.services.login_email_protection import parse_login_email_window_hours
 from app.services.pagination import require_account_capacity
-from app.webapp.server import account_pagination, qr_login_payload, reusable_phone_login
+from app.webapp.server import (
+    account_pagination,
+    create_webapp,
+    qr_login_payload,
+    reusable_phone_login,
+)
 
 
 @pytest.mark.parametrize(
@@ -88,13 +94,24 @@ def test_system_account_limit_is_fifty() -> None:
         require_account_capacity(50)
 
 
+def test_mini_app_registers_account_delete_route() -> None:
+    app = asyncio.run(create_webapp(None, None))
+    delete_routes = [
+        route
+        for route in app.router.routes()
+        if route.method == "DELETE" and route.handler.__name__ == "api_account_delete"
+    ]
+
+    assert len(delete_routes) == 1
+
+
 def test_mini_app_actions_enable_compact_view_specific_layout() -> None:
     index = Path("app/webapp/static/index.html").read_text(encoding="utf-8")
     script = Path("app/webapp/static/app.js").read_text(encoding="utf-8")
     styles = Path("app/webapp/static/styles.css").read_text(encoding="utf-8")
 
     assert '<body data-view="dashboard">' in index
-    assert "20260813-pagination1" in index
+    assert "20260813-delete1" in index
     assert "document.body.dataset.view = view" in script
     assert "tg.disableVerticalSwipes?.()" in script
     assert 'height: var(--tg-viewport-stable-height, 100dvh)' in styles
@@ -103,3 +120,7 @@ def test_mini_app_actions_enable_compact_view_specific_layout() -> None:
     assert 'body[data-view="actions"] .action-pane .panel' in styles
     assert "const ACCOUNT_PAGE_SIZE = 10" in script
     assert 'id="accountPagination"' in index
+    assert 'id="deleteAccountBtn"' in script
+    assert 'method: "DELETE"' in script
+    assert script.count("await confirmAction(`") >= 2
+    assert ".account-danger-zone" in styles

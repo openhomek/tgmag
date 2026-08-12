@@ -24,7 +24,7 @@ from app.db.models import (
     TgSession,
 )
 from app.services.crypto import decrypt_text, encrypt_text, mask_phone
-from app.services.pagination import require_account_capacity
+from app.services.pagination import ACCOUNT_CAPACITY_LOCK_ID, require_account_capacity
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ async def save_logged_in_account(
 ) -> TgAccount:
     # Serialize account creation so concurrent login/import flows cannot cross
     # the system-wide account limit together. This is a PostgreSQL transaction lock.
-    await session.execute(text("SELECT pg_advisory_xact_lock(84502117)"))
+    await session.execute(text(f"SELECT pg_advisory_xact_lock({ACCOUNT_CAPACITY_LOCK_ID})"))
     account = await session.scalar(select(TgAccount).where(TgAccount.user_id == me.id))
     if account is None:
         phone_masked = mask_phone(phone)

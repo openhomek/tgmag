@@ -37,6 +37,7 @@ class ClientPool:
         self._monitor_task: asyncio.Task[None] | None = None
         self.login_email_protector = LoginEmailProtector(sessionmaker, bot)
         self._protection_tasks: set[asyncio.Task[None]] = set()
+        self._deleting_account_ids: set[int] = set()
         self._service_message_locks: dict[int, asyncio.Lock] = {}
         self._login_email_health_lock = asyncio.Lock()
         self.login_email_health_checked_at: datetime | None = None
@@ -191,6 +192,44 @@ class ClientPool:
             except Exception:
                 logger.exception("Failed to disconnect dropped account %s", account_id)
 
+    async def begin_account_deletion(self, account_id: int) -> None:
+        """Fence an account from reconnects, cancel its workers, then disconnect it."""
+        async with self._lock:
+            if account_id in self._deleting_account_ids:
+                raise ValueError("账号正在删除，请勿重复操作")
+            self._deleting_account_ids.add(account_id)
+        try:
+            async with self.sessionmaker() as session:
+                event_ids = set(
+                    (
+                        await session.scalars(
+                            select(LoginEmailProtectionEvent.id).where(
+                                LoginEmailProtectionEvent.account_id == account_id
+                            )
+                        )
+                    ).all()
+                )
+            correlated_tasks = {
+                task
+                for task in self._protection_tasks
+                if not task.done()
+                and any(task.get_name().endswith(f"-{event_id}") for event_id in event_ids)
+            }
+            for task in correlated_tasks:
+                task.cancel()
+            if correlated_tasks:
+                await asyncio.gather(*correlated_tasks, return_exceptions=True)
+            await self.login_email_protector.cancel_account_tasks(account_id, event_ids)
+            self._service_message_locks.pop(account_id, None)
+            await self.drop(account_id)
+        except Exception:
+            await self.end_account_deletion(account_id)
+            raise
+
+    async def end_account_deletion(self, account_id: int) -> None:
+        async with self._lock:
+            self._deleting_account_ids.discard(account_id)
+
     async def retry_login_email_protection(self, event_id: int, domain: str) -> None:
         async with self.sessionmaker() as session:
             event = await session.get(LoginEmailProtectionEvent, event_id)
@@ -212,6 +251,8 @@ class ClientPool:
 
     async def get_client(self, account_id: int) -> TelegramClient:
         async with self._lock:
+            if account_id in self._deleting_account_ids:
+                raise ValueError(f"账号 {account_id} 正在删除")
             existing = self.clients.get(account_id)
             if existing and existing.is_connected():
                 return existing

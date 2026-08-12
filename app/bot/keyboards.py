@@ -184,8 +184,39 @@ def account_actions_panel(account_id: int, accounts_page: int = 1) -> InlineKeyb
             ],
             [
                 InlineKeyboardButton(
+                    text="删除账号", callback_data=f"acct_delete:ask:{account_id}:{accounts_page}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text="返回列表", callback_data=f"nav:accounts:{accounts_page}"
                 ),
+            ],
+        ]
+    )
+
+
+def account_delete_confirm_panel(
+    account_id: int,
+    accounts_page: int,
+    *,
+    final: bool = False,
+) -> InlineKeyboardMarkup:
+    action = "confirm" if final else "verify"
+    label = "确认永久删除" if final else "继续删除"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"acct_delete:{action}:{account_id}:{accounts_page}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="取消并返回账号",
+                    callback_data=f"acct:{account_id}:{accounts_page}",
+                )
             ],
         ]
     )

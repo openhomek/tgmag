@@ -2,6 +2,7 @@ from __future__ import annotations
 
 ACCOUNT_PAGE_SIZE = 10
 MAX_SYSTEM_ACCOUNTS = 50
+ACCOUNT_CAPACITY_LOCK_ID = 84502117
 
 
 def account_page_window(total: int, requested_page: int) -> tuple[int, int, int]:
