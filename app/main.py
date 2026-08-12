@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 async def restore_admin_keyboards(bot: Bot) -> None:
+    """Re-send the canonical reply keyboard after every successful service start."""
     for admin_id in settings.admin_ids:
         try:
             await bot.send_message(
@@ -60,7 +61,7 @@ async def main() -> None:
 
     web_runner = await start_webapp(sessionmaker, pool)
     if web_runner is not None:
-        logging.info("Mini App server started on %s:%s", settings.mini_app_host, settings.mini_app_port)
+        logger.info("Mini App server started on %s:%s", settings.mini_app_host, settings.mini_app_port)
 
     await pool.start_service_monitor()
     await restore_admin_keyboards(bot)

@@ -16,6 +16,7 @@ from app.db.models import LoginEmailProtectionEvent, TgAccount
 
 
 def main_menu() -> ReplyKeyboardMarkup:
+    """Return the single client-retained, user-collapsible reply keyboard."""
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="系统状态"), KeyboardButton(text="账号管理")],

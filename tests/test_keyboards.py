@@ -1,4 +1,7 @@
+import ast
+import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -11,6 +14,7 @@ from app.bot.keyboards import (
     main_menu,
 )
 from app.config import settings
+from app.main import restore_admin_keyboards
 
 
 def test_main_menu_is_collapsible_and_reopenable() -> None:
@@ -24,8 +28,39 @@ def test_main_menu_is_collapsible_and_reopenable() -> None:
 def test_project_never_sends_reply_keyboard_remove() -> None:
     source = "\n".join(path.read_text(encoding="utf-8") for path in Path("app").rglob("*.py"))
     assert "ReplyKeyboardRemove" not in source
-    assert "remove_keyboard=True" not in source
-    assert '"remove_keyboard": true' not in source.lower()
+    assert "remove_keyboard" not in source
+
+
+def test_project_has_one_canonical_reply_keyboard_constructor() -> None:
+    constructors: list[tuple[Path, int]] = []
+    for path in Path("app").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = node.func.id if isinstance(node.func, ast.Name) else None
+            if name == "ReplyKeyboardMarkup":
+                constructors.append((path, node.lineno))
+
+    assert len(constructors) == 1
+    assert constructors[0][0] == Path("app/bot/keyboards.py")
+
+
+def test_service_restart_restores_collapsible_keyboard_for_every_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "admin_ids", [101, 202])
+    bot = type("BotStub", (), {"send_message": AsyncMock()})()
+
+    asyncio.run(restore_admin_keyboards(bot))
+
+    assert bot.send_message.await_count == 2
+    assert [call.args[0] for call in bot.send_message.await_args_list] == [101, 202]
+    for call in bot.send_message.await_args_list:
+        payload = call.kwargs["reply_markup"].model_dump(exclude_none=True)
+        assert payload["resize_keyboard"] is True
+        assert payload["is_persistent"] is False
+        assert payload["one_time_keyboard"] is False
 
 
 def test_main_navigation_labels_are_reply_keyboard_buttons() -> None:
