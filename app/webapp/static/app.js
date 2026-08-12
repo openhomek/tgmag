@@ -165,6 +165,7 @@ const pageMeta = {
 function switchView(view) {
   if (!pageMeta[view]) return;
   state.activeView = view;
+  document.body.dataset.view = view;
   if (view !== "accounts") closeAccountDetail(false);
   qsa(".tab").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   qsa(".view").forEach((section) => section.classList.remove("active"));

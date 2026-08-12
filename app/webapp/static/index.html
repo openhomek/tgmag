@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <title>TGMAG 控制台</title>
-    <link rel="stylesheet" href="/mini-app/static/styles.css?v=20260812-ui2" />
+    <link rel="stylesheet" href="/mini-app/static/styles.css?v=20260812-ui3" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
-  <body>
+  <body data-view="dashboard">
     <div class="app-layout">
       <aside class="sidebar">
         <div class="brand">
@@ -100,10 +100,10 @@
 
         <section id="actionsView" class="view">
           <div class="segmented" role="tablist" aria-label="操作类型">
-            <button class="segment active" type="button" data-action-pane="phone">手机号添加</button>
-            <button class="segment" type="button" data-action-pane="qr">二维码登录</button>
-            <button class="segment" type="button" data-action-pane="session">导入 Session</button>
-            <button class="segment" type="button" data-action-pane="batch">批量任务</button>
+            <button class="segment active" type="button" data-action-pane="phone" aria-label="手机号添加">手机号</button>
+            <button class="segment" type="button" data-action-pane="qr" aria-label="二维码登录">扫码</button>
+            <button class="segment" type="button" data-action-pane="session" aria-label="导入 Session">Session</button>
+            <button class="segment" type="button" data-action-pane="batch" aria-label="批量任务">批量</button>
             <button class="segment" type="button" data-action-pane="export">导出</button>
           </div>
 
@@ -203,6 +203,6 @@
         <button class="tab" type="button" data-view="settings"><span>⚙</span><small>设置</small></button>
       </nav>
     </div>
-    <script src="/mini-app/static/app.js?v=20260812-ui2"></script>
+    <script src="/mini-app/static/app.js?v=20260812-ui3"></script>
   </body>
 </html>

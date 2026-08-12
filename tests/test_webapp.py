@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -61,3 +62,14 @@ def test_recent_phone_login_is_reused_without_requesting_another_code() -> None:
     assert reusable is not None and reusable[0] == "recent"
     assert reusable_phone_login(app, 7, "+441234567890") is None
     assert reusable_phone_login(app, 8, "+447700900123") is None
+
+
+def test_mini_app_actions_enable_compact_view_specific_layout() -> None:
+    index = Path("app/webapp/static/index.html").read_text(encoding="utf-8")
+    script = Path("app/webapp/static/app.js").read_text(encoding="utf-8")
+    styles = Path("app/webapp/static/styles.css").read_text(encoding="utf-8")
+
+    assert '<body data-view="dashboard">' in index
+    assert "20260812-ui3" in index
+    assert "document.body.dataset.view = view" in script
+    assert 'body[data-view="actions"] .action-pane .panel' in styles
