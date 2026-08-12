@@ -23,15 +23,12 @@ def main_menu() -> ReplyKeyboardMarkup:
                 KeyboardButton(text="登录账号"),
                 KeyboardButton(text="扫码登录"),
             ],
-            [KeyboardButton(text="导入Session"), KeyboardButton(text="导出Session")],
-            [KeyboardButton(text="批量导入Session"), KeyboardButton(text="批量任务")],
-            [KeyboardButton(text="目标与速率"), KeyboardButton(text="安全防护")],
-            [KeyboardButton(text="监控中心")],
+            [KeyboardButton(text="安全防护")],
         ],
         resize_keyboard=True,
         is_persistent=False,
         one_time_keyboard=False,
-        input_field_placeholder="选择一个管理入口",
+        input_field_placeholder="选择常用操作",
     )
 
 

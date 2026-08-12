@@ -35,14 +35,24 @@ def test_main_navigation_labels_are_reply_keyboard_buttons() -> None:
         "账号管理",
         "登录账号",
         "扫码登录",
-        "导入Session",
-        "导出Session",
-        "批量导入Session",
-        "批量任务",
-        "目标与速率",
         "安全防护",
-        "监控中心",
     }
+    assert len(main_menu().keyboard) == 3
+
+
+def test_advanced_features_stay_out_of_reply_keyboard() -> None:
+    labels = {button.text for row in main_menu().keyboard for button in row}
+    assert labels.isdisjoint(
+        {
+            "导入Session",
+            "导出Session",
+            "批量导入Session",
+            "批量任务",
+            "目标与速率",
+            "监控中心",
+            "内置应用",
+        }
+    )
 
 
 def test_phone_login_offers_qr_fallback() -> None:

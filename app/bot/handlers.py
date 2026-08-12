@@ -720,7 +720,8 @@ def download_url_to_file(url: str, path: Path) -> None:
 async def start(message: Message) -> None:
     await message.answer(
         "Telegram 多账号管理 Bot\n\n"
-        "主菜单可以用输入框旁的小键盘按钮随时展开或收起。请选择管理入口。",
+        "主菜单可以用输入框旁的小键盘按钮随时展开或收起。"
+        "这里只保留常用入口，Session、批量任务和高级设置请从输入框旁的“打开”菜单进入。",
         reply_markup=main_menu(),
     )
 
