@@ -162,6 +162,15 @@ const pageMeta = {
   settings: ["CONFIGURATION", "运行设置"],
 };
 
+function scrollPageTop(behavior = "smooth") {
+  const shell = qs(".shell");
+  if (window.matchMedia("(max-width: 920px)").matches && shell) {
+    shell.scrollTo({ top: 0, behavior });
+    return;
+  }
+  window.scrollTo({ top: 0, behavior });
+}
+
 function switchView(view) {
   if (!pageMeta[view]) return;
   state.activeView = view;
@@ -173,7 +182,7 @@ function switchView(view) {
   qs("#pageEyebrow").textContent = pageMeta[view][0];
   qs("#pageTitle").textContent = pageMeta[view][1];
   updateBackButton();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  scrollPageTop();
 }
 
 function switchActionPane(pane) {
@@ -411,7 +420,7 @@ function closeAccountDetail(scroll = true) {
   qs("#accountBrowser")?.classList.remove("hidden");
   if (state.activeView === "accounts") {
     qs("#pageTitle").textContent = pageMeta.accounts[1];
-    if (scroll) window.scrollTo({ top: 0, behavior: "smooth" });
+    if (scroll) scrollPageTop();
   }
   updateBackButton();
 }
@@ -425,7 +434,7 @@ async function openAccountDetail(accountId) {
   detail.innerHTML = '<div class="panel empty-state">正在加载账号详情…</div>';
   qs("#pageTitle").textContent = `账号 #${Number(accountId)}`;
   updateBackButton();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  scrollPageTop();
   try {
     const data = await api(`/accounts/${accountId}`);
     if (state.activeAccountId !== Number(accountId)) return;
@@ -907,6 +916,7 @@ qs("#reloadTargetsBtn").addEventListener("click", () => loadBootstrap());
 if (tg) {
   tg.ready();
   tg.expand();
+  tg.disableVerticalSwipes?.();
   tg.BackButton?.onClick(() => {
     if (state.activeAccountId) closeAccountDetail();
     else switchView("dashboard");

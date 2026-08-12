@@ -70,6 +70,10 @@ def test_mini_app_actions_enable_compact_view_specific_layout() -> None:
     styles = Path("app/webapp/static/styles.css").read_text(encoding="utf-8")
 
     assert '<body data-view="dashboard">' in index
-    assert "20260812-ui3" in index
+    assert "20260812-ui4" in index
     assert "document.body.dataset.view = view" in script
+    assert "tg.disableVerticalSwipes?.()" in script
+    assert 'height: var(--tg-viewport-stable-height, 100dvh)' in styles
+    assert "overflow-y: auto" in styles
+    assert 'const shell = qs(".shell")' in script
     assert 'body[data-view="actions"] .action-pane .panel' in styles
