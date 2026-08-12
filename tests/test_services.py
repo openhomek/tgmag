@@ -4,6 +4,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telethon.errors import (
+    InviteHashExpiredError,
+    InviteRequestSentError,
+    UserAlreadyParticipantError,
+)
 
 from app.bot.handlers import (
     forward_to_target,
@@ -16,7 +21,7 @@ from app.services import security_health
 from app.services.qr_code import login_qr_png
 from app.services.rate_limit import validate_rate_values
 from app.services.security_health import SecurityHealthCheck, SecurityHealthReport
-from app.services.targets import canonicalize_target_ref
+from app.services.targets import canonicalize_target_ref, telegram_invite_hash
 from app.tg import batch_ops
 from app.tg.account_ops import phone_from_user
 
@@ -44,6 +49,63 @@ def test_target_canonicalization() -> None:
     assert canonicalize_target_ref(" @Example ") == "@example"
     assert canonicalize_target_ref("https://t.me/Example/") == "@example"
     assert canonicalize_target_ref("-1000123") == "-1000123"
+    assert canonicalize_target_ref("https://telegram.me/joinchat/AbCd_12345") == (
+        "https://t.me/+AbCd_12345"
+    )
+    assert canonicalize_target_ref("tg://join?invite=AbCd_12345") == (
+        "https://t.me/+AbCd_12345"
+    )
+    assert telegram_invite_hash("https://t.me/+AbCd_12345") == "AbCd_12345"
+
+
+def test_private_invite_subscribe_uses_import_request() -> None:
+    client = AsyncMock(return_value=SimpleNamespace(chats=[SimpleNamespace(id=2406607000)]))
+    pool = SimpleNamespace(get_client=AsyncMock(return_value=client))
+
+    result = asyncio.run(batch_ops.subscribe(pool, 7, "https://t.me/+AbCd_12345"))
+
+    assert result == {
+        "joined": "https://t.me/+AbCd_12345",
+        "status": "joined",
+        "chat_id": 2406607000,
+    }
+    request = client.await_args.args[0]
+    assert request.hash == "AbCd_12345"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (UserAlreadyParticipantError(request=None), "already_member"),
+        (InviteRequestSentError(request=None), "request_sent"),
+    ],
+)
+def test_private_invite_subscribe_handles_non_failure_results(error, expected: str) -> None:
+    client = AsyncMock(side_effect=error)
+    pool = SimpleNamespace(get_client=AsyncMock(return_value=client))
+
+    result = asyncio.run(batch_ops.subscribe(pool, 7, "+AbCd_12345"))
+
+    assert result["status"] == expected
+
+
+def test_private_invite_subscribe_explains_expired_links() -> None:
+    client = AsyncMock(side_effect=InviteHashExpiredError(request=None))
+    pool = SimpleNamespace(get_client=AsyncMock(return_value=client))
+
+    with pytest.raises(ValueError, match="邀请链接已过期"):
+        asyncio.run(batch_ops.subscribe(pool, 7, "https://t.me/+AbCd_12345"))
+
+
+def test_private_group_id_subscribe_requests_an_invite_link() -> None:
+    pool = SimpleNamespace(
+        get_client=AsyncMock(return_value=SimpleNamespace(get_input_entity=AsyncMock())),
+        sessionmaker=AsyncMock(),
+    )
+    pool.get_client.return_value.get_input_entity.side_effect = ValueError("unknown entity")
+
+    with pytest.raises(ValueError, match="无法仅凭 ID 加入"):
+        asyncio.run(batch_ops.subscribe(pool, 7, "-1002406607000"))
 
 
 def test_rate_validation() -> None:

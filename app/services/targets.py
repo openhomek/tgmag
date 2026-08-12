@@ -1,11 +1,35 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
+import re
+from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AllowedTarget
+
+TELEGRAM_LINK_HOSTS = {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}
+INVITE_HASH_PATTERN = re.compile(r"[A-Za-z0-9_-]{5,128}")
+
+
+def telegram_invite_hash(target_ref: str) -> str | None:
+    value = target_ref.strip()
+    candidate = ""
+    if value.startswith("+"):
+        candidate = value[1:]
+    else:
+        parsed = urlparse(value if "://" in value else "")
+        if parsed.scheme in {"http", "https"} and parsed.hostname in TELEGRAM_LINK_HOSTS:
+            path = parsed.path.strip("/")
+            if path.startswith("+"):
+                candidate = path[1:]
+            elif path.lower().startswith("joinchat/"):
+                candidate = path.split("/", 1)[1]
+        elif parsed.scheme == "tg" and parsed.netloc.lower() == "join":
+            candidate = parse_qs(parsed.query).get("invite", [""])[0]
+    if candidate and INVITE_HASH_PATTERN.fullmatch(candidate):
+        return candidate
+    return None
 
 
 def canonicalize_target_ref(target_ref: str) -> str:
@@ -16,8 +40,11 @@ def canonicalize_target_ref(target_ref: str) -> str:
         return str(int(value))
     if value.startswith("@"):
         return "@" + value[1:].lower()
+    invite_hash = telegram_invite_hash(value)
+    if invite_hash:
+        return f"https://t.me/+{invite_hash}"
     parsed = urlparse(value if "://" in value else "")
-    if parsed.hostname in {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}:
+    if parsed.hostname in TELEGRAM_LINK_HOSTS:
         path = parsed.path.strip("/")
         if path and "/" not in path and not path.startswith("+"):
             return "@" + path.lower()

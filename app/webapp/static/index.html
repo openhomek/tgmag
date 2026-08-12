@@ -155,7 +155,7 @@
               <form id="batchForm" class="panel form">
                 <label><span>任务类型</span><select name="type"><option value="send">发送消息</option><option value="subscribe">关注频道/群</option><option value="react">添加反应</option><option value="unreact">取消反应</option><option value="view_post">浏览帖子</option><option value="forward">转发消息</option></select></label>
                 <div class="split"><label><span>起始账号 ID</span><input name="start_id" inputmode="numeric" value="1" /></label><label><span>账号数量</span><input name="count" inputmode="numeric" value="1" /></label></div>
-                <label><span>目标</span><input name="target" placeholder="@your_channel 或 ID" /></label>
+                <label><span>目标</span><input name="target" placeholder="@用户名、ID 或 t.me/+ 私邀链接" /></label>
                 <label class="forward-only hidden"><span>源目标</span><input name="source" placeholder="@source_channel 或 ID" /></label>
                 <label class="text-only"><span>消息文本</span><textarea name="text" rows="4" placeholder="要发送的内容"></textarea></label>
                 <div class="split message-fields hidden"><label><span>消息 ID</span><input name="message_id" inputmode="numeric" /></label><label class="react-only hidden"><span>Emoji</span><input name="emoji" value="👍" /></label></div>
@@ -183,7 +183,7 @@
             <section class="panel">
               <div class="panel-head"><div><p class="section-kicker">ALLOWLIST</p><h2>授权目标</h2></div><button id="reloadTargetsBtn" class="link-button" type="button">刷新</button></div>
               <p class="muted panel-description">批量任务只能访问这里明确授权的频道或群组。</p>
-              <form id="targetForm" class="form compact-form"><select name="target_type"><option value="channel">频道</option><option value="group">群组</option><option value="user">用户</option></select><input name="target_ref" placeholder="@target 或 ID" /><input name="title" placeholder="备注名称" /><button class="secondary-button" type="submit">添加</button></form>
+              <form id="targetForm" class="form compact-form"><select name="target_type"><option value="channel">频道</option><option value="group">群组</option><option value="user">用户</option></select><input name="target_ref" placeholder="@目标、ID 或私邀链接" /><input name="title" placeholder="备注名称" /><button class="secondary-button" type="submit">添加</button></form>
               <div id="targetsList" class="list"></div>
             </section>
             <section class="panel">

@@ -1433,7 +1433,6 @@ async def api_targets_update(request: web.Request) -> web.Response:
                 raise web.HTTPBadRequest(text=str(exc)) from exc
             exists = await session.scalar(
                 select(AllowedTarget.id).where(
-                    AllowedTarget.target_type == target_type,
                     AllowedTarget.target_ref == target_ref,
                 )
             )
