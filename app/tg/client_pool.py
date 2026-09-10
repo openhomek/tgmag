@@ -20,7 +20,7 @@ from app.services.crypto import decrypt_text
 from app.services.login_email_protection import (
     LoginEmailProtector,
     LoginEmailWindowNotice,
-    is_login_code_alert,
+    is_login_email_protection_alert,
 )
 
 logger = logging.getLogger(__name__)
@@ -322,7 +322,7 @@ class ClientPool:
             received_at = message.date or datetime.now(UTC)
             if received_at.tzinfo is None:
                 received_at = received_at.replace(tzinfo=UTC)
-            if received_at < cutoff or not is_login_code_alert(text):
+            if received_at < cutoff or not is_login_email_protection_alert(text):
                 continue
             await self._ingest_service_message(
                 account_id,
@@ -383,7 +383,7 @@ class ClientPool:
         received_at: datetime,
     ) -> bool:
         """Only protect login alerts created after the active session was admitted."""
-        if not is_login_code_alert(text):
+        if not is_login_email_protection_alert(text):
             return False
         async with self.sessionmaker() as session:
             session_created_at = await session.scalar(
@@ -453,7 +453,9 @@ class ClientPool:
         # Session and is only the enrollment baseline. Protect strictly newer
         # alerts, including existing rows saved by a manual history pull.
         window_notice = None
-        if await self._is_post_session_login_alert(account_id, text, received_at):
+        if source_user_id == 777000 and await self._is_post_session_login_alert(
+            account_id, text, received_at
+        ):
             try:
                 window_notice = await self.login_email_protector.record_alert(
                     account_id, service_message_id
@@ -465,7 +467,7 @@ class ClientPool:
                     "Failed to record login email protection window for account %s",
                     account_id,
                 )
-        elif is_login_code_alert(text):
+        elif is_login_email_protection_alert(text):
             logger.info(
                 "Stored baseline login alert without protection for account %s, message %s",
                 account_id,

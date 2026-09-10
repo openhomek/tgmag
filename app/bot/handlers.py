@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import io
+import re
 import shlex
 import tempfile
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from aiogram import Bot, F, Router
@@ -68,6 +69,7 @@ from app.bot.states import (
     ImportSessionFlow,
     ImportSessionsFlow,
     LoginEmailDomainFlow,
+    LoginEmailEditFlow,
     LoginEmailWindowFlow,
     LoginFlow,
     ProfileEditFlow,
@@ -90,7 +92,7 @@ from app.db.models import (
 from app.services.account_deletion import delete_account_records
 from app.services.audit import audit
 from app.services.backups import create_database_backup_async
-from app.services.crypto import decrypt_text
+from app.services.crypto import decrypt_text, encrypt_text
 from app.services.jobs import add_job_item, create_job, finish_job
 from app.services.login_email_protection import (
     EMAIL_BACKEND_CLOUDFLARE,
@@ -697,7 +699,7 @@ def post_login_security_text(account: TgAccount, twofa_info: dict[str, str | boo
             "检测到账号未开启 2FA。\n"
             "请打开 2FA 设置，自行设置每个账号唯一的强密码。"
         )
-    return f"{header}\n检测到账号已经开启 2FA，但没有配置登录邮箱，请在 2FA 设置中补充。"
+    return f"{header}\n检测到账号已经开启 2FA，但没有配置登录邮箱，请在账号管理中点击“配置登录邮箱”。"
 
 
 async def prompt_post_login_security(
@@ -2118,6 +2120,119 @@ async def privacy_set_callback(
     except Exception as exc:
         text = f"隐私设置失败：{exc}"
     await callback.message.answer(text, reply_markup=privacy_keys_panel(account_id))
+
+
+@router.callback_query(F.data.startswith("loginemail:configure:"))
+async def login_email_configure(
+    callback: CallbackQuery, state: FSMContext,
+    sessionmaker: async_sessionmaker[AsyncSession], client_pool: ClientPool,
+) -> None:
+    account_id = int((callback.data or "").rsplit(":", 1)[1])
+    if await state.get_state() == LoginEmailEditFlow.code.state:
+        await callback.answer("请先提交当前邮箱验证码，或取消当前操作。", show_alert=True)
+        return
+    current_email = None
+    async with sessionmaker() as session:
+        security = await session.get(AccountSecurity, account_id)
+        if security and security.login_email_encrypted:
+            current_email = decrypt_text(security.login_email_encrypted)
+    if not current_email:
+        try:
+            client = await client_pool.get_client(account_id)
+            info = await account_ops.get_2fa_info(client)
+            current_email = info.get("login_email_pattern") or "未配置"
+        except Exception:
+            current_email = "暂时无法读取（本地暂无记录）"
+    await state.clear()
+    await state.set_state(LoginEmailEditFlow.email)
+    await state.update_data(account_id=account_id)
+    await ask_callback_with_cancel(
+        callback, f"账号 #{account_id} 配置登录邮箱\n当前登录邮箱：{current_email}\n\n"
+        "请输入新登录邮箱地址，随后输入该邮箱收到的验证码。",
+        "name@example.com",
+    )
+
+
+@router.message(LoginEmailEditFlow.email)
+async def login_email_edit_address(
+    message: Message, state: FSMContext,
+    sessionmaker: async_sessionmaker[AsyncSession], client_pool: ClientPool,
+) -> None:
+    email = (message.text or "").strip()
+    if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        await ask_with_cancel(message, "邮箱地址格式无效，请重新输入。", "name@example.com")
+        return
+    data = await state.get_data()
+    account_id = int(data["account_id"])
+    protector = client_pool.login_email_protector
+    try:
+        client = await client_pool.get_client(account_id)
+        if protector.has_change_in_progress(account_id):
+            raise ValueError("该账号正在换绑或等待验证码，请先完成现有流程，或等待验证码过期。")
+        lock = protector._change_locks.setdefault(account_id, asyncio.Lock())
+        async with lock:
+            async with sessionmaker() as session:
+                active = await session.scalar(select(LoginEmailProtectionEvent.id).where(
+                    LoginEmailProtectionEvent.account_id == account_id,
+                    LoginEmailProtectionEvent.status.in_({"requesting", "waiting_email"}),
+                ).limit(1))
+            if active is not None:
+                raise ValueError("该账号正在自动换绑，请稍后再试。")
+            sent = await account_ops.send_login_email_code(client, email)
+            deadline = datetime.now(timezone.utc) + timedelta(
+                seconds=settings.login_email_poll_timeout_seconds
+            )
+            protector.manual_email_waits[account_id] = deadline
+            await state.update_data(email=email, deadline=deadline.isoformat(), code_length=sent["length"])
+            await state.set_state(LoginEmailEditFlow.code)
+    except Exception as exc:
+        await message.answer(f"登录邮箱发码失败：{protector._friendly_failure_reason(exc)}",
+                             reply_markup=account_actions_panel(account_id))
+        return
+    await ask_with_cancel(message, f"验证码已发送到 {sent['email_pattern']}，请输入 {sent['length']} 位验证码。", "邮箱验证码")
+
+
+@router.message(LoginEmailEditFlow.code)
+async def login_email_edit_code(
+    message: Message, state: FSMContext,
+    sessionmaker: async_sessionmaker[AsyncSession], client_pool: ClientPool,
+) -> None:
+    data = await state.get_data()
+    account_id = int(data["account_id"])
+    deadline = datetime.fromisoformat(data["deadline"])
+    if deadline <= datetime.now(timezone.utc):
+        await state.clear()
+        await message.answer("本次验证码等待已过期，请重新配置登录邮箱。", reply_markup=account_actions_panel(account_id))
+        return
+    code = (message.text or "").strip()
+    if not code.isascii() or not code.isdigit() or len(code) != int(data["code_length"]):
+        await ask_with_cancel(message, "验证码格式不正确，请重新输入邮件中的验证码。", "邮箱验证码")
+        return
+    protector = client_pool.login_email_protector
+    try:
+        client = await client_pool.get_client(account_id)
+        async with protector._change_locks.setdefault(account_id, asyncio.Lock()):
+            if protector.manual_email_waits.get(account_id) != deadline:
+                raise ValueError("本次换绑流程已失效，请重新配置。")
+            result = await account_ops.confirm_login_email(client, code)
+            confirmed_email = str(getattr(result, "email", "") or "")
+            if confirmed_email.lower() != data["email"].lower():
+                raise ValueError("Telegram 返回的邮箱与本次目标邮箱不一致，请刷新账号详情。")
+            async with sessionmaker() as session:
+                security = await session.get(AccountSecurity, account_id)
+                if security is None:
+                    security = AccountSecurity(account_id=account_id, has_2fa=False)
+                    session.add(security)
+                security.login_email_encrypted = encrypt_text(confirmed_email)
+                admin = await session.scalar(select(Admin).where(Admin.telegram_user_id == message.from_user.id))
+                await audit(session, admin, "bot_login_email_confirm", "account", str(account_id))
+                await session.commit()
+            protector.manual_email_waits.pop(account_id, None)
+    except Exception as exc:
+        await ask_with_cancel(message, f"登录邮箱确认失败：{protector._friendly_failure_reason(exc)}\n可重新输入验证码。", "邮箱验证码")
+        return
+    await state.clear()
+    await message.answer(f"账号 #{account_id} 登录邮箱已配置：{confirmed_email}", reply_markup=account_actions_panel(account_id))
 
 
 @router.callback_query(F.data.startswith("twofa_edit:"))

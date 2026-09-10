@@ -238,8 +238,9 @@ def test_incomplete_protection_events_become_retryable() -> None:
     assert session.committed is True
 
 
+@pytest.mark.parametrize("premium,whitelisted", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("window_hours", [0, 24])
-def test_first_alert_uses_account_specific_window(monkeypatch, window_hours: int) -> None:
+def test_first_alert_uses_account_specific_window(monkeypatch, window_hours: int, premium, whitelisted) -> None:
     detected_at = datetime.now(UTC)
 
     class Session:
@@ -258,7 +259,9 @@ def test_first_alert_uses_account_specific_window(monkeypatch, window_hours: int
 
         async def get(self, model, key):
             if model is login_email_protection.ServiceMessage:
-                return SimpleNamespace(received_at=detected_at)
+                return SimpleNamespace(received_at=detected_at, text="Telegram Premium" if premium else "")
+            if model is login_email_protection.LoginEmailWhitelist and whitelisted:
+                return SimpleNamespace(account_id=4)
             if model is login_email_protection.TgAccount:
                 return SimpleNamespace(
                     phone_encrypted="encrypted-phone",
@@ -295,6 +298,13 @@ def test_first_alert_uses_account_specific_window(monkeypatch, window_hours: int
 
     notice = asyncio.run(protector._record_alert_locked(4, 73))
 
+    if whitelisted:
+        assert notice is None
+        assert session.added.status == "whitelisted"
+        return
+    if premium:
+        window_hours = 0
+
     assert notice is not None
     assert notice.event_id == 91
     assert notice.starts_new_window is True
@@ -310,11 +320,13 @@ def test_first_alert_uses_account_specific_window(monkeypatch, window_hours: int
     protector._notify.assert_not_awaited()
 
 
-def test_alerts_inside_window_are_merged_without_extending_it(monkeypatch) -> None:
-    first_at = datetime.now(UTC)
+@pytest.mark.parametrize("premium,status", [(False, "waiting_window"), (True, "waiting_window"), (True, "waiting_email"), (True, "requesting")])
+def test_alerts_inside_window_are_merged_without_extending_it(monkeypatch, premium, status) -> None:
+    first_at = datetime.now(UTC) - login_email_protection.timedelta(hours=3)
     second_at = first_at + login_email_protection.timedelta(hours=2)
     window_ends_at = first_at + login_email_protection.timedelta(hours=8)
     active_window = SimpleNamespace(
+        status=status,
         id=91,
         alert_count=1,
         detected_at=first_at,
@@ -338,7 +350,7 @@ def test_alerts_inside_window_are_merged_without_extending_it(monkeypatch) -> No
 
         async def get(self, model, key):
             if model is login_email_protection.ServiceMessage:
-                return SimpleNamespace(received_at=second_at)
+                return SimpleNamespace(received_at=second_at, text="Telegram Premium" if premium else "")
             if model is login_email_protection.TgAccount:
                 return SimpleNamespace(phone_encrypted="encrypted-phone")
             return None
@@ -365,13 +377,19 @@ def test_alerts_inside_window_are_merged_without_extending_it(monkeypatch) -> No
         AsyncMock(return_value="mail.example.com"),
     )
 
+    waiter = SimpleNamespace(cancel=lambda: setattr(waiter, "cancelled", True), cancelled=False)
+    protector._window_waiters = {91: waiter}
     notice = asyncio.run(protector._record_alert_locked(4, 74))
+    expedited = premium and status == "waiting_window"
+    assert waiter.cancelled == expedited
+    if expedited:
+        window_ends_at = second_at
 
     assert notice is not None
     assert notice.event_id == 91
-    assert notice.starts_new_window is False
+    assert notice.starts_new_window == expedited
     assert notice.alert_count == 2
-    assert notice.window_hours == 8
+    assert notice.window_hours == (0 if expedited else 8)
     assert notice.window_ends_at == window_ends_at
     assert session.added.status == "merged"
     assert session.added.parent_event_id == 91
@@ -561,3 +579,21 @@ def test_resume_waiting_email_uses_remaining_time(monkeypatch) -> None:
     kwargs = protector._execute_change.await_args.kwargs
     assert kwargs["requested_at"] == requested_at
     assert 230 <= kwargs["wait_timeout_seconds"] <= 240
+
+
+@pytest.mark.parametrize("text", [
+    "Thank you for subscribing to 🌟 Telegram Premium! Learn all about the exclusive benefits you've unlocked: @premium.",
+    "Gracias por suscribirte a Telegram Premium", "Votre abonnement Premium a été renouvelé",
+    "Dein Telegram Premium-Abonnement läuft ab", "Il tuo abbonamento Premium è attivo",
+    "感谢订阅 Telegram Premium！", "会员即将到期，详情：@premium",
+    "TELEGRAM PREMIUM", "@PREMIUM",
+    "Telegram Premium subscription cancelled", "You received a gift: @premium",
+    "Ｔｅｌｅｇｒａｍ Ｐｒｅｍｉｕｍ", "Telegram Pre\u200bmium",
+])
+def test_premium_related_notices(text):
+    assert login_email_protection.is_premium_notice(text)
+    assert login_email_protection.is_login_email_protection_alert(text)
+
+@pytest.mark.parametrize("text", ["", "Login code: 12345", "Your login email was changed", "Telegram update", "@premium_support", "premiumize", "您的會員訂閱即將到期", "プレミアム"])
+def test_unrelated_notices_are_not_premium(text):
+    assert not login_email_protection.is_premium_notice(text)

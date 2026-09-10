@@ -38,3 +38,8 @@ class LoginEmailDomainFlow(StatesGroup):
 
 class LoginEmailWindowFlow(StatesGroup):
     value = State()
+
+
+class LoginEmailEditFlow(StatesGroup):
+    email = State()
+    code = State()

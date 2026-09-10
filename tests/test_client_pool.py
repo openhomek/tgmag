@@ -1,4 +1,6 @@
 import asyncio
+
+import pytest
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -34,8 +36,9 @@ class FakeSessionmaker:
         return self.session
 
 
-def test_existing_service_row_still_reaches_protector(monkeypatch) -> None:
-    text = "Login code: 97588. Do not give this code to anyone."
+@pytest.mark.parametrize("text", ["Login code: 97588.", "感谢订阅 Telegram Premium！"])
+@pytest.mark.parametrize("source", [777000, 123456])
+def test_existing_service_row_still_reaches_protector(monkeypatch, text, source) -> None:
     record = SimpleNamespace(
         id=73,
         text=text,
@@ -61,7 +64,7 @@ def test_existing_service_row_still_reaches_protector(monkeypatch) -> None:
     async def exercise() -> None:
         await pool._ingest_service_message(
             account_id=4,
-            source_user_id=777000,
+            source_user_id=source,
             message_id=99,
             text=text,
             received_at=datetime.now(UTC),
@@ -71,6 +74,9 @@ def test_existing_service_row_still_reaches_protector(monkeypatch) -> None:
 
     asyncio.run(exercise())
 
+    if source != 777000:
+        pool.login_email_protector.record_alert.assert_not_awaited()
+        return
     pool.login_email_protector.record_alert.assert_awaited_once_with(4, 73)
     pool.login_email_protector.wait_for_window.assert_awaited_once_with(91, client)
     assert "已开启 24 小时登录邮箱保护窗口" in pool._window_notice_text(notice)

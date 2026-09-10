@@ -173,6 +173,9 @@ def account_actions_panel(account_id: int, accounts_page: int = 1) -> InlineKeyb
             ],
             [
                 InlineKeyboardButton(
+                    text="配置登录邮箱", callback_data=f"loginemail:configure:{account_id}",
+                ),
+                InlineKeyboardButton(
                     text="登录邮箱保护",
                     callback_data=f"emailguard:account:{account_id}",
                 )
@@ -342,7 +345,7 @@ def twofa_panel(account_id: int) -> InlineKeyboardMarkup:
                     text="修改 2FA", callback_data=f"twofa_edit:change:{account_id}"
                 ),
                 InlineKeyboardButton(
-                    text="配置邮箱", callback_data=f"twofa_edit:email:{account_id}"
+                    text="配置 2FA 恢复邮箱", callback_data=f"twofa_edit:email:{account_id}"
                 ),
             ],
             [
